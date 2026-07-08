@@ -48,6 +48,10 @@
 
 C# / .NET 8 (WPF) · WebView2 · SQLite(Microsoft.Data.Sqlite) · DiscUtils(APFS/HFS+ 읽기)
 
+## 라이선스
+
+[MIT License](LICENSE) © 2026 Unknown
+
 ## 제작
 
 **Unknown** · YouTube [@unknown8563](https://www.youtube.com/@unknown8563)
