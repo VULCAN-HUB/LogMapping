@@ -1,0 +1,21 @@
+# ── Build output ──
+bin/
+obj/
+publish_out/
+*.user
+*.suo
+.vs/
+
+# ── Runtime data (카탈로그/DB는 사용자 데이터) ──
+data/
+*.hcat
+*.hcat.bak
+catalog.db
+catalog.db-wal
+catalog.db-shm
+catalog.db.bak
+
+# ── Misc ──
+*.log
+Thumbs.db
+.DS_Store
