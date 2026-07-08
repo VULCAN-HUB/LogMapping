@@ -1,0 +1,1393 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<title>LogMapping</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg0:#0a0a0a;--bg1:#111111;--bg2:#181818;--bg3:#1f1f1f;
+  --bd:#252525;--bd2:#2e2e2e;
+  --t0:#f0ece8;--t1:#9a9490;--t2:#585250;
+  --acc:#D35400;--acc2:#B34700;
+  --danger:#ff5555;--warn:#E86A00;--good:#1D9E75;
+  font-family:'Malgun Gothic','맑은 고딕','Apple SD Gothic Neo','Noto Sans KR',sans-serif;
+  font-size:14px;color:var(--t0);background:var(--bg0);
+}
+body{height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
+.titlebar{background:var(--bg1);border-bottom:0.5px solid var(--bd);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0;-webkit-app-region:drag}
+.titlebar *{-webkit-app-region:no-drag}
+.logo{font-size:15px;font-weight:700;letter-spacing:3px;color:var(--t0)}
+.logo span{color:var(--acc)}
+.tsep{flex:1}
+.file-tag{font-size:11px;color:var(--t2);border:0.5px solid var(--bd);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{font-size:12px;padding:5px 11px;border:0.5px solid var(--bd2);border-radius:5px;background:var(--bg2);color:var(--t0);cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;transition:all .1s}
+.btn:hover{border-color:var(--acc);color:var(--acc)}
+.btn.pri{background:var(--acc);color:#000;border-color:var(--acc);font-weight:700}
+.btn.pri:hover{background:var(--acc2)}
+.btn.dng{color:var(--danger);border-color:#3a2020}
+.btn.dng:hover{background:#2a1010}
+.btn.dirty{background:var(--acc);color:#000;border-color:var(--acc);font-weight:700}
+.layout{display:grid;grid-template-columns:224px 1fr;flex:1;min-height:0;overflow:hidden}
+.sidebar{background:var(--bg1);border-right:0.5px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+.sb-hd{padding:10px 13px 8px;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--t2);border-bottom:0.5px solid var(--bd);flex-shrink:0}
+.drive-list{flex:1;overflow-y:auto}
+.drive-list::-webkit-scrollbar{width:4px}
+.drive-list::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px}
+.drive-item{padding:9px 13px;cursor:pointer;border-bottom:0.5px solid var(--bd);display:grid;grid-template-columns:26px 1fr;align-items:start;gap:8px;transition:background .1s;border-left:3px solid transparent}
+.drive-item:hover{background:var(--bg2)}
+.drive-item.active{background:var(--bg2);border-left-color:var(--acc)!important}
+.dn{width:22px;height:22px;border-radius:4px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#000;margin-top:1px}
+.di-name{font-size:12px;font-weight:600;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.di-meta{font-size:10px;color:var(--t2);margin-top:1px}
+.di-tags{margin-top:3px;display:flex;flex-wrap:wrap;gap:2px}
+.tag-mini{font-size:9px;padding:1px 5px;border-radius:8px;font-weight:600}
+.warn-badge{font-size:9px;color:var(--warn);margin-left:3px}
+.health-bad{color:var(--danger)}
+.health-warn{color:var(--warn)}
+.health-good{color:var(--good)}
+.sb-foot{padding:8px 13px;border-top:0.5px solid var(--bd);font-size:10px;color:var(--t2);flex-shrink:0}
+.main{display:flex;flex-direction:column;overflow:hidden;background:var(--bg0)}
+.search-row{padding:8px 14px;border-bottom:0.5px solid var(--bd);background:var(--bg1);display:flex;gap:8px;align-items:center;flex-shrink:0}
+.search-row input{flex:1;background:var(--bg2);border:0.5px solid var(--bd);border-radius:5px;padding:5px 9px;color:var(--t0);outline:none;font-size:13px;transition:border .1s}
+.search-row input:focus{border-color:var(--acc)}
+.filter-row{padding:6px 14px;border-bottom:0.5px solid var(--bd);background:var(--bg1);display:flex;gap:5px;align-items:center;flex-wrap:wrap;flex-shrink:0}
+.chip{font-size:10px;padding:3px 8px;border:0.5px solid var(--bd2);border-radius:20px;cursor:pointer;color:var(--t2);background:transparent;transition:all .1s}
+.chip:hover{border-color:var(--t1);color:var(--t1)}
+.chip.on{background:var(--acc);color:#000;border-color:var(--acc);font-weight:700}
+.sort-sel{font-size:10px;padding:3px 7px;border:0.5px solid var(--bd);border-radius:5px;background:var(--bg2);color:var(--t1);outline:none;cursor:pointer;margin-left:auto}
+.tab-bar{display:flex;border-bottom:0.5px solid var(--bd);background:var(--bg1);padding:0 14px;flex-shrink:0}
+.tab{padding:7px 13px;font-size:11px;letter-spacing:.5px;color:var(--t2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-0.5px}
+.tab:hover{color:var(--t1)}
+.tab.active{color:var(--acc);border-bottom-color:var(--acc)}
+.content{flex:1;overflow-y:auto;padding:14px}
+.content::-webkit-scrollbar{width:4px}
+.content::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px}
+.tree-item{display:flex;align-items:center;gap:5px;padding:2px 4px;cursor:pointer;border-radius:4px;color:var(--t0)}
+.tree-item:hover{background:var(--bg2)}
+.tree-item .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-item .sz{color:var(--t2);font-size:10px;flex-shrink:0}
+.tree-toggle{width:11px;text-align:center;font-size:10px;color:var(--t2);flex-shrink:0}
+.ext-badge{font-size:9px;padding:1px 4px;border-radius:3px;font-weight:700;flex-shrink:0;text-transform:uppercase}
+.search-results{display:flex;flex-direction:column;gap:5px}
+.ri{background:var(--bg1);border:0.5px solid var(--bd);border-radius:6px;padding:9px 11px;display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:9px}
+.ri-name{font-size:12px;font-weight:600;color:var(--t0)}
+.ri-path{font-size:10px;color:var(--t2);margin-top:2px;word-break:break-all}
+.ri-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.ri-badge{font-size:11px;padding:2px 8px;border-radius:4px;border:0.5px solid;white-space:nowrap;font-weight:700;text-align:center}
+.ri-size{font-size:10px;color:var(--t2)}
+.copy-btn{font-size:10px;padding:2px 6px;border:0.5px solid var(--bd2);border-radius:3px;background:var(--bg2);color:var(--t2);cursor:pointer;transition:all .1s;white-space:nowrap}
+.copy-btn:hover{border-color:var(--acc);color:var(--acc)}
+.copy-btn.copied{border-color:var(--acc);color:var(--acc)}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:14px}
+.sc{background:var(--bg2);border-radius:6px;padding:11px;border:0.5px solid var(--bd)}
+.sc-lbl{font-size:10px;color:var(--t2);letter-spacing:.5px;margin-bottom:3px}
+.sc-val{font-size:20px;font-weight:700;color:var(--t0)}
+.bar-bg{height:3px;background:var(--bd2);border-radius:2px;margin-top:6px;overflow:hidden}
+.bar-fill{height:100%;border-radius:2px}
+.cat-title{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--t2);margin-bottom:8px;padding-bottom:4px;border-bottom:0.5px solid var(--bd)}
+.dh{display:flex;align-items:start;gap:11px;margin-bottom:14px;padding-bottom:11px;border-bottom:0.5px solid var(--bd)}
+.dbignum{width:40px;height:40px;border-radius:6px;font-size:19px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#000}
+.dname{font-size:16px;font-weight:700;color:var(--t0)}
+.dmeta{font-size:11px;color:var(--t2);margin-top:2px}
+.dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:16px}
+.dash-card{background:var(--bg2);border-radius:6px;padding:12px;border:0.5px solid var(--bd);text-align:center}
+.dash-val{font-size:22px;font-weight:700;color:var(--t0);line-height:1.2}
+.dash-lbl{font-size:10px;color:var(--t2);margin-top:3px;letter-spacing:.5px}
+.cat-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:12px}
+.cat-bar-name{width:40px;color:var(--t1);flex-shrink:0;font-size:11px}
+.cat-bar-track{flex:1;height:6px;background:var(--bd2);border-radius:3px;overflow:hidden}
+.cat-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.cat-bar-cnt{width:50px;text-align:right;color:var(--t2);font-size:11px;flex-shrink:0}
+.warn-box{background:#2a1f00;border:0.5px solid #ffaa0044;border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:var(--warn);display:flex;align-items:center;gap:8px}
+.folder-ri{background:var(--bg1);border:0.5px solid #D3540033;border-radius:6px;padding:10px 12px;margin-bottom:6px}
+.folder-ri-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.folder-ri-path{font-size:10px;color:var(--t2);margin-bottom:7px;word-break:break-all}
+.folder-ri-files{border-top:0.5px solid var(--bd);padding-top:7px;display:flex;flex-direction:column;gap:3px}
+.fi-row{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--t1);min-width:0}
+.fi-row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fi-row .sz{font-size:10px;color:var(--t2);flex-shrink:0}
+.file-group{background:var(--bg1);border:0.5px solid var(--bd);border-radius:6px;margin-bottom:6px;overflow:hidden}
+.file-group-head{display:flex;align-items:center;gap:8px;padding:7px 11px;background:var(--bg2);border-bottom:0.5px solid var(--bd)}
+.file-group-body{padding:5px 11px 8px;display:flex;flex-direction:column;gap:3px}
+.sec-title{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--t2);margin:14px 0 8px;padding-bottom:4px;border-bottom:0.5px solid var(--bd)}
+.sec-title:first-child{margin-top:0}
+.dup-group{background:var(--bg1);border:0.5px solid var(--bd);border-radius:6px;margin-bottom:10px;overflow:hidden}
+.dup-head{padding:8px 12px;font-size:12px;font-weight:600;color:var(--t0);border-bottom:0.5px solid var(--bd);display:flex;align-items:center;gap:8px}
+.dup-file{padding:6px 12px;font-size:11px;color:var(--t1);border-bottom:0.5px solid var(--bd);display:flex;align-items:center;gap:8px}
+.dup-file:last-child{border-bottom:none}
+.health-box{background:var(--bg2);border-radius:6px;padding:12px;border:0.5px solid var(--bd);margin-bottom:14px}
+.health-row{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:12px;border-bottom:0.5px solid var(--bd)}
+.health-row:last-child{border-bottom:none}
+.health-lbl{width:90px;color:var(--t2);font-size:11px;flex-shrink:0}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;z-index:100}
+.modal{background:var(--bg2);border:0.5px solid var(--bd2);border-radius:10px;padding:22px;width:400px;max-width:92vw;max-height:90vh;overflow-y:auto}
+.modal h3{font-size:14px;font-weight:700;margin-bottom:14px;color:var(--t0)}
+.modal label{font-size:10px;color:var(--t2);display:block;margin-bottom:3px;margin-top:11px;letter-spacing:1px;text-transform:uppercase}
+.modal input,.modal select{width:100%;background:var(--bg3);border:0.5px solid var(--bd2);border-radius:5px;padding:7px 9px;color:var(--t0);outline:none;font-size:13px}
+.modal input[type=date]{color-scheme:dark}
+.modal input:focus{border-color:var(--acc)}
+.modal-actions{display:flex;gap:7px;margin-top:18px;justify-content:flex-end}
+.tag-row{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.tag-opt{font-size:10px;padding:3px 8px;border-radius:12px;cursor:pointer;border:0.5px solid var(--bd2);color:var(--t2);transition:all .1s}
+.tag-opt:hover{border-color:var(--t1);color:var(--t1)}
+.tag-opt.on{background:var(--acc);color:#000;border-color:var(--acc);font-weight:700}
+.color-dot{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:border .1s;flex-shrink:0}
+.color-dot.on{border-color:var(--acc)!important}
+.prog-track{height:3px;background:var(--bd2);border-radius:2px;margin-top:6px;overflow:hidden}
+.prog-fill{height:100%;background:var(--acc);border-radius:2px;transition:width .1s}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:300px;color:var(--t2);gap:14px;text-align:center}
+.empty-icon{font-size:40px}
+.empty-state p{font-size:12px;line-height:2}
+.no-res{padding:40px 0;text-align:center;color:var(--t2);font-size:12px}
+mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
+#startup{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:40px}
+@keyframes logoglow{0%,100%{text-shadow:0 0 24px rgba(211,84,0,.25)}50%{text-shadow:0 0 48px rgba(211,84,0,.55),0 0 90px rgba(211,84,0,.15)}}
+.s-logo{font-size:38px;font-weight:700;letter-spacing:6px;color:var(--t0);animation:logoglow 3.5s ease-in-out infinite}
+.s-logo span{color:var(--acc)}
+.s-sub{font-size:11px;color:var(--t2);letter-spacing:2.5px;text-transform:uppercase;margin-top:-18px}
+.s-card{background:var(--bg2);border:0.5px solid var(--bd2);border-radius:10px;padding:24px 32px;display:flex;flex-direction:column;gap:12px;width:380px}
+.s-title{font-size:10px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px}
+.s-btn{display:flex;align-items:center;gap:12px;padding:11px 14px;border:0.5px solid var(--bd2);border-radius:6px;background:var(--bg3);color:var(--t0);cursor:pointer;transition:all .12s;text-align:left;width:100%}
+.s-btn:hover{border-color:var(--acc);color:var(--acc)}
+.s-btn.pri{background:var(--acc);color:#000;border-color:var(--acc);font-weight:700}
+.s-btn.pri:hover{background:var(--acc2)}
+.s-btn-icon{font-size:20px;flex-shrink:0}
+.s-btn-lbl{font-size:13px;font-weight:600}
+.s-btn-desc{font-size:10px;color:var(--t2);margin-top:1px}
+.s-btn.pri .s-btn-desc{color:#333}
+.s-divider{text-align:center;font-size:10px;color:var(--t2);letter-spacing:1px}
+.s-hint{font-size:10px;color:var(--t2);text-align:center;line-height:1.9}
+.s-hint code{color:var(--acc);background:var(--bg3);padding:1px 5px;border-radius:3px}
+.auto-badge{font-size:10px;color:var(--acc);border:0.5px solid var(--acc);border-radius:4px;padding:1px 6px;margin-left:6px}
+@keyframes sigpulse{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:.85;transform:scale(1.7)}}
+.sig{position:fixed;bottom:5px;right:10px;display:flex;align-items:center;gap:7px;z-index:50;cursor:pointer;pointer-events:all;transition:opacity .2s;background:var(--bg0);padding:2px 8px;border-radius:6px}
+.sig:hover{opacity:1!important}
+.sig:hover .sig-name{color:var(--t1)}
+.sig-dot{width:4px;height:4px;border-radius:50%;background:var(--acc);flex-shrink:0;animation:sigpulse 2.8s ease-in-out infinite}
+.sig-label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--t2);opacity:.55}
+.sig-sep{font-size:9px;color:var(--bd2)}
+.sig-name{font-size:10px;font-weight:700;color:var(--t2);letter-spacing:0.5px;opacity:.75;transition:color .2s}
+@keyframes aboutIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.about-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.about-dialog{background:var(--bg2);border:0.5px solid var(--bd2);border-radius:10px;width:340px;overflow:hidden;animation:aboutIn .25s ease;box-shadow:0 24px 60px rgba(0,0,0,.6)}
+.about-header{background:var(--acc);padding:20px 22px 16px;display:flex;align-items:center;gap:14px}
+.about-icon{width:48px;height:48px;background:rgba(0,0,0,.25);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.about-appname{font-size:20px;font-weight:700;letter-spacing:4px;color:#fff}
+.about-appsub{font-size:10px;color:rgba(255,255,255,.65);letter-spacing:1.5px;margin-top:2px}
+.about-body{padding:18px 22px 14px}
+.about-row{display:flex;align-items:baseline;padding:6px 0;border-bottom:0.5px solid var(--bd)}
+.about-row:last-child{border-bottom:none}
+.about-lbl{font-size:10px;color:var(--t2);width:60px;flex-shrink:0;letter-spacing:.5px}
+.about-val{font-size:11px;color:var(--t0);font-weight:500;letter-spacing:.3px}
+.about-val span{color:var(--acc)}
+.about-yt{font-size:10px;color:var(--t2);text-decoration:none;cursor:pointer;transition:color .15s}
+.about-yt:hover{color:var(--acc)}
+.about-footer{padding:12px 22px 16px;display:flex;justify-content:flex-end;border-top:0.5px solid var(--bd)}
+.about-ok{font-size:11px;padding:6px 22px;background:var(--acc);color:#000;border:none;border-radius:5px;font-weight:700;cursor:pointer;letter-spacing:.5px}
+.about-ok:hover{background:var(--acc2)}
+.ctx-menu{position:fixed;z-index:999;background:var(--bg2);border:0.5px solid var(--bd2);border-radius:8px;padding:4px;min-width:158px;box-shadow:0 8px 28px rgba(0,0,0,.55)}
+.ctx-item{padding:7px 13px;font-size:12px;cursor:pointer;border-radius:5px;color:var(--t0);display:flex;align-items:center;gap:8px;white-space:nowrap}
+.ctx-item:hover{background:var(--bg3)}
+.ctx-sep{height:0.5px;background:var(--bd);margin:3px 4px}
+</style>
+</head>
+<body>
+
+<div id="startup">
+  <div>
+    <div class="s-logo">LOG<span>MAPPING</span></div>
+  </div>
+  <div class="s-card">
+    <div class="s-title">시작하기</div>
+    <div id="auto-load-area"></div>
+    <button class="s-btn pri" onclick="openHcatFile().catch(e=>alert('오류: '+e.message))">
+      <span class="s-btn-icon">📂</span>
+      <div><div class="s-btn-lbl">.hcat 파일 열기</div><div class="s-btn-desc">기존 카탈로그를 불러옵니다</div></div>
+    </button>
+    <div class="s-divider">── 또는 ──</div>
+    <button class="s-btn" onclick="startFresh()">
+      <span class="s-btn-icon">✨</span>
+      <div><div class="s-btn-lbl">새 카탈로그 시작</div><div class="s-btn-desc">빈 상태로 시작 — 나중에 저장</div></div>
+    </button>
+    <p class="s-hint">프로그램과 같은 폴더의 <code>data/</code> 안에<br><code>.hcat</code> 파일이 있으면 자동으로 감지합니다.</p>
+  </div>
+</div>
+
+<div id="appwrap" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+  <div class="titlebar">
+    <div class="logo">LOG<span>MAPPING</span></div>
+    <div class="tsep"></div>
+    <div class="file-tag" id="file-tag">저장 안 됨</div>
+    <button class="btn dirty" id="btn-save" style="display:none" onclick="saveCurrentFile()">💾 저장</button>
+    <button class="btn" onclick="saveAsNewFile()">다른 이름 저장</button>
+    <button class="btn" onclick="exportCSV()" title="전체 파일 목록을 CSV로 내보내기">↓ CSV</button>
+    <button class="btn" onclick="exportMobileViewer()" title="스마트폰에서 검색 가능한 뷰어 HTML 생성">📱 뷰어</button>
+    <button class="btn" onclick="goStartup()">← 홈</button>
+    <button class="btn pri" onclick="openAddDrive()">+ 드라이브 추가</button>
+  </div>
+  <div class="layout">
+    <div class="sidebar">
+      <div class="sb-hd">드라이브 목록</div>
+      <div class="drive-list" id="drive-list"></div>
+      <div class="sb-foot">총 <span id="total-drives">0</span>개 드라이브 · <span id="total-files">0</span>개 파일</div>
+    </div>
+    <div class="main">
+      <div class="search-row">
+        <span style="color:var(--t2);font-size:15px;flex-shrink:0">⌕</span>
+        <input type="text" id="search-input" placeholder="파일명·확장자 검색 후 Enter (예: .mp4, 프로젝트, RAW)" onkeydown="if(event.key==='Enter')doSearch()"/>
+        <span id="search-count" style="font-size:10px;color:var(--t2);flex-shrink:0"></span>
+        <button class="btn" onclick="doSearch()" style="flex-shrink:0;padding:4px 10px">검색</button>
+        <button class="btn" id="search-clear-btn" onclick="clearSearch()" style="display:none;flex-shrink:0;padding:4px 9px;color:var(--t2)" title="검색 초기화">✕</button>
+      </div>
+      <div class="filter-row">
+        <span style="font-size:9px;color:var(--t2);letter-spacing:1px">분류:</span>
+        <div class="chip on" data-cat="all" onclick="setFilter('all')">전체</div>
+        <div class="chip" data-cat="video" onclick="setFilter('video')">▶ 영상</div>
+        <div class="chip" data-cat="image" onclick="setFilter('image')">◉ 사진</div>
+        <div class="chip" data-cat="audio" onclick="setFilter('audio')">♪ 음악</div>
+        <div class="chip" data-cat="doc" onclick="setFilter('doc')">▣ 문서</div>
+        <div class="chip" data-cat="design" onclick="setFilter('design')">◈ 디자인</div>
+        <div class="chip" data-cat="other" onclick="setFilter('other')">· 기타</div>
+        <div class="chip" data-cat="folder" onclick="setFilter('folder')">📁 폴더</div>
+        <div class="chip" id="chip-tag" data-cat="tag" onclick="showTagFilterPicker(this)">🏷 태그</div>
+        <select class="sort-sel" id="sort-sel" onchange="onSort(this.value)">
+          <option value="name-asc">이름 ↑</option>
+          <option value="name-desc">이름 ↓</option>
+          <option value="size-desc">용량 큰 순</option>
+          <option value="size-asc">용량 작은 순</option>
+        </select>
+      </div>
+      <div class="tab-bar">
+        <div class="tab active" id="tab-browse" onclick="switchTab('browse')">파일 탐색</div>
+        <div class="tab" id="tab-search" onclick="switchTab('search')">검색 결과</div>
+        <div class="tab" id="tab-info" onclick="switchTab('info')">드라이브 정보</div>
+        <div class="tab" id="tab-dup" onclick="switchTab('dup')">중복 파일</div>
+        <div class="tab" id="tab-dash" onclick="switchTab('dash')">전체 통계</div>
+        <div class="tab" id="tab-viewmode" style="margin-left:auto" onclick="showViewModeMenu(this)">👁 보기 변경</div>
+      </div>
+      <div class="content" id="content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 드라이브 추가 모달 -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h3>새 드라이브 추가</h3>
+    <div id="step1">
+      <label>현재 연결된 드라이브</label>
+      <div id="drive-picker" style="margin-top:6px;display:flex;flex-direction:column;gap:6px"></div>
+      <button class="btn" style="margin-top:10px;width:100%;justify-content:center" onclick="refreshDrivePicker()">🔄 새로고침</button>
+      <div style="margin-top:8px;text-align:center;font-size:9px;color:var(--t2)">── 또는 NAS · 네트워크 드라이브 ──</div>
+      <button class="btn" style="margin-top:6px;width:100%;justify-content:center" onclick="selectCustomFolder()">📁 폴더 직접 선택</button>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+      </div>
+    </div>
+    <div id="step2" style="display:none">
+      <div id="selected-drive-info" style="background:var(--bg3);border-radius:6px;padding:10px 12px;margin-bottom:4px;font-size:11px;color:var(--t1);line-height:1.7"></div>
+      <label>드라이브 번호 (겉면 스티커)</label>
+      <input type="number" id="inp-num" min="1" max="999" placeholder="예: 4"/>
+      <label>드라이브 이름</label>
+      <input type="text" id="inp-name" placeholder="예: 영상 백업 2024"/>
+      <label>보관 위치 메모</label>
+      <input type="text" id="inp-note" placeholder="예: 창고 2번째 서랍"/>
+      <label>구매일</label>
+      <input type="date" id="inp-purchase"/>
+      <label>보증 만료일</label>
+      <input type="date" id="inp-warranty"/>
+      <label>드라이브 상태</label>
+      <select id="inp-health">
+        <option value="good">✅ 정상</option>
+        <option value="warn">⚠️ 주의</option>
+        <option value="bad">🔴 위험</option>
+      </select>
+      <label>건강 메모 (SMART 결과 등)</label>
+      <input type="text" id="inp-health-note" placeholder="예: 배드섹터 발생 이력 없음"/>
+      <label>태그</label>
+      <div class="tag-row" id="tag-row"></div>
+      <label>색상</label>
+      <div id="color-row" style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap"></div>
+      <div id="scan-area"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="goStep1()">← 뒤로</button>
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn pri" id="btn-scan" onclick="startDriveScan()">🔍 스캔 시작</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 오류 상세 다이얼로그 (복사 가능) -->
+<div class="modal-overlay" id="err-detail-overlay" style="display:none">
+  <div class="modal" style="width:520px;max-width:95vw">
+    <h3 style="color:var(--danger)">스캔 실패</h3>
+    <p style="font-size:12px;color:var(--t1);margin:6px 0 8px">아래 오류 내용을 복사해서 공유하세요.</p>
+    <textarea id="err-detail-text" readonly style="width:100%;height:200px;background:var(--bg0);color:var(--t0);border:1px solid var(--bd2);border-radius:6px;padding:8px;font-size:11px;font-family:monospace;resize:vertical;user-select:text"></textarea>
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button class="btn" onclick="var t=document.getElementById('err-detail-text');t.select();document.execCommand('copy');this.textContent='✓ 복사됨';setTimeout(()=>this.textContent='클립보드 복사',1500)">클립보드 복사</button>
+      <button class="btn pri" onclick="document.getElementById('err-detail-overlay').style.display='none'">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 드라이브 정보 수정 모달 -->
+<div class="modal-overlay" id="rename-overlay">
+  <div class="modal" style="width:340px">
+    <h3>드라이브 정보 수정</h3>
+    <label>드라이브 번호</label>
+    <input type="number" id="rename-num" min="1" max="999"/>
+    <label>드라이브 이름</label>
+    <input type="text" id="rename-name"/>
+    <label>보관 위치 메모</label>
+    <input type="text" id="rename-note"/>
+    <label>구매일</label>
+    <input type="date" id="rename-purchase"/>
+    <label>보증 만료일</label>
+    <input type="date" id="rename-warranty"/>
+    <label>드라이브 상태</label>
+    <select id="rename-health">
+      <option value="good">✅ 정상</option>
+      <option value="warn">⚠️ 주의</option>
+      <option value="bad">🔴 위험</option>
+    </select>
+    <label>건강 메모</label>
+    <input type="text" id="rename-health-note" placeholder="예: SMART 확인 완료"/>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeRename()">취소</button>
+      <button class="btn pri" onclick="applyRename()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 드라이브 우클릭 컨텍스트 메뉴 -->
+<div id="ctx-menu" class="ctx-menu" style="display:none">
+  <div class="ctx-item" onclick="ctxAction('info')"><span>ℹ️</span>드라이브 정보</div>
+  <div class="ctx-item" onclick="ctxAction('edit')"><span>✏️</span>정보 수정</div>
+  <div class="ctx-item" onclick="ctxAction('rescan')"><span>🔄</span>재스캔</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('delete')" style="color:var(--danger)"><span>✕</span>삭제</div>
+</div>
+
+<div class="sig" onclick="document.getElementById('about-overlay').style.display='flex'">
+  <div class="sig-dot"></div>
+  <div class="sig-label">PROJECT 01</div>
+  <div class="sig-sep">·</div>
+  <div class="sig-name">Unknown</div>
+</div>
+
+<div class="about-overlay" id="about-overlay" onclick="if(event.target===this)this.style.display='none'">
+  <div class="about-dialog">
+    <div class="about-header">
+      <div class="about-icon">🗂️</div>
+      <div>
+        <div class="about-appname">LOGMAPPING</div>
+        <div class="about-appsub">File Catalog Manager</div>
+      </div>
+    </div>
+    <div class="about-body">
+      <div class="about-row"><span class="about-lbl">프로젝트</span><span class="about-val"><span>PROJECT 01</span></span></div>
+      <div class="about-row"><span class="about-lbl">제작</span><span class="about-val">Unknown</span></div>
+      <div class="about-row"><span class="about-lbl">연도</span><span class="about-val">2026</span></div>
+      <div class="about-row"><span class="about-lbl">버전</span><span class="about-val"><span>BETA Ver-0.1</span></span></div>
+      <div class="about-row"><span class="about-lbl">엔진</span><span class="about-val">WebView2 · WPF · .NET 8</span></div>
+      <div class="about-row"><span class="about-lbl">플랫폼</span><span class="about-val">Windows 10/11  64-bit</span></div>
+      <div class="about-row"><span class="about-lbl">유튜브</span><span class="about-val"><a class="about-yt" onclick="callNative('openUrl',{path:'https://www.youtube.com/@unknown8563'})">@unknown8563</a></span></div>
+    </div>
+    <div class="about-footer">
+      <button class="about-ok" onclick="document.getElementById('about-overlay').style.display='none'">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── WEBVIEW2 BRIDGE ───────────────────────────────────────────────────────────
+const _pending = new Map();
+let _callSeq = 0;
+let _scanProgressCb = null;
+
+function callNative(type, params, timeoutMs) {
+  params = params || {};
+  timeoutMs = timeoutMs || 60000;
+  return new Promise(function(resolve, reject) {
+    var id = 'n' + (++_callSeq);
+    _pending.set(id, resolve);
+    var msg = { type: type, id: id };
+    if (params.path     !== undefined) msg.path     = params.path;
+    if (params.content  !== undefined) msg.content  = params.content;
+    if (params.fileName !== undefined) msg.fileName = params.fileName;
+    if (params.driveId    !== undefined) msg.driveId    = params.driveId;
+    if (params.parentPath !== undefined) msg.parentPath = params.parentPath;
+    if (params.query      !== undefined) msg.query      = params.query;
+    if (params.color      !== undefined) msg.color      = params.color;
+    if (params.limit      !== undefined) msg.limit      = params.limit;
+    if (params.meta       !== undefined) msg.meta       = params.meta;
+    window.chrome.webview.postMessage(msg);
+    setTimeout(function() {
+      if (_pending.has(id)) { _pending.delete(id); reject(new Error('타임아웃 (' + type + ')')); }
+    }, timeoutMs);
+  });
+}
+
+window.chrome.webview.addEventListener('message', function(ev) {
+  var msg = ev.data;
+  if (!msg || !msg.type) return;
+  if (msg.type === 'scanProgress') { if (_scanProgressCb) _scanProgressCb(msg.data); return; }
+  if (msg.type === 'macDrivesFound') { appendMacDrivesToPicker(msg.data.drives || []); return; }
+  if (msg.type === 'windowClosing') { if (isDirty) { try { persistCatalog(); } catch(e){} } return; }
+  if (msg.data && msg.data.id && _pending.has(msg.data.id)) {
+    var resolve = _pending.get(msg.data.id);
+    _pending.delete(msg.data.id);
+    resolve(msg.data);
+  }
+});
+
+// ── DB(SQLite) 헬퍼 ─────────────────────────────────────────────────────────
+function dbCall(type, params){ return callNative(type, params || {}, 86400000); }
+function dbRows(res){ if(!res||res.error) return []; try{ return JSON.parse(res.rowsJson||'[]'); }catch(e){ return []; } }
+var treeCache = {}; // key: dbId+'|'+parentPath → [{name,is_dir,size,full_path,color,childCount}]
+function ckey(dbId, pp){ return dbId+'|'+pp; }
+async function loadChildren(dbId, pp){
+  var r = await dbCall('dbChildren', {driveId: dbId, parentPath: pp});
+  treeCache[ckey(dbId, pp)] = dbRows(r);
+  return treeCache[ckey(dbId, pp)];
+}
+
+// ── PATH HELPERS ──────────────────────────────────────────────────────────────
+function pathBasename(p) { if (!p) return ''; return p.replace(/\\/g,'/').split('/').filter(Boolean).pop() || p; }
+function pathDirname(p)  { if (!p) return ''; var parts = p.replace(/\\/g,'/').split('/').filter(Boolean); parts.pop(); return parts.join('\\'); }
+// onclick 속성용 경로 이스케이프 (단따옴표 문자열 안에 삽입)
+function escPath(p){ return String(p||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r/g,'').replace(/\n/g,'').replace(/\t/g,''); }
+
+// ── CONSTANTS ─────────────────────────────────────────────────────────────────
+var APP_DIR = '', DATA_DIR = '';
+
+const TAGS_OPTS = ['영상','사진','음악','문서','디자인','백업','작업','개인','가족','보관'];
+const COLORS = [
+  {id:'lime',bg:'#a8d900',text:'#000'},{id:'teal',bg:'#1D9E75',text:'#fff'},
+  {id:'blue',bg:'#378ADD',text:'#fff'},{id:'purple',bg:'#7F77DD',text:'#fff'},
+  {id:'coral',bg:'#D85A30',text:'#fff'},{id:'pink',bg:'#D4537E',text:'#fff'},
+  {id:'amber',bg:'#BA7517',text:'#fff'},{id:'gray',bg:'#888780',text:'#fff'},
+];
+const EXT_MAP = {
+  video:  ['mkv','mp4','avi','mov','wmv','m4v','flv','webm','ts','m2ts','rmvb','mpg','mpeg','braw','r3d','mxf','mts','vob','3gp','f4v','asf'],
+  image:  ['jpg','jpeg','png','gif','webp','raw','cr2','cr3','nef','arw','tiff','tif','bmp','heic','dng','orf','rw2','raf','srw','x3f','heif','avif'],
+  audio:  ['mp3','flac','wav','aac','m4a','ogg','opus','wma','aiff','alac','ape','dsf','dff'],
+  doc:    ['pdf','docx','doc','xlsx','xls','pptx','ppt','txt','md','hwp','pages','numbers','key','csv','rtf','odt','ods','odp'],
+  design: ['ai','psd','indd','xd','fig','sketch','eps','svg','afdesign','afphoto','blend','c4d','ae','prproj','drp','resolve'],
+};
+const EXT_COLORS = {video:'#1D9E75',image:'#378ADD',audio:'#7F77DD',doc:'#BA7517',design:'#D4537E',other:'#888780'};
+const EXT_ICONS  = {video:'▶',image:'◉',audio:'♪',doc:'▣',design:'◈',other:'·'};
+const CAT_LABELS = {video:'영상',image:'사진',audio:'음악',doc:'문서',design:'디자인',other:'기타'};
+const HEALTH_LABEL = {good:'✅ 정상', warn:'⚠️ 주의', bad:'🔴 위험'};
+const HEALTH_CLASS = {good:'health-good', warn:'health-warn', bad:'health-bad'};
+const WARN_MONTHS = 6;
+
+var catalog = {drives:[], version:2};
+var selectedDrive = null;
+var currentTab = 'browse';
+var searchQuery = '', filterCat = 'all', sortMode = 'name-asc', filterTagColor = '';
+var treeState = {}, selectedTags = [], selectedColor = 'lime';
+var viewMode = 'detail';
+var currentFilePath = null, isDirty = false;
+var _searchTimer = null; // 디바운스 타이머
+var _folderStates = {};  // 폴더결과 펼침 상태: key → 'collapsed'|'expanded'|'full'
+var _clickTimers  = {};  // 단일/더블클릭 판별 타이머
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function getCategory(fn){var ext=fn.split('.').pop().toLowerCase();for(var cat in EXT_MAP)if(EXT_MAP[cat].includes(ext))return cat;return'other';}
+function getDriveColor(d){return COLORS.find(function(x){return x.id===(d.color||'gray');})||COLORS[COLORS.length-1];}
+function fGB(mb){if(!mb)return'–';if(mb>=1024*1024)return(mb/1024/1024).toFixed(1)+' TB';if(mb>=1024)return(mb/1024).toFixed(1)+' GB';return Math.round(mb)+' MB';}
+function fSZ(kb){if(kb==null||kb===undefined)return'–';if(kb===0)return'0 KB';if(kb>=1024*1024)return(kb/1024/1024).toFixed(1)+' GB';if(kb>=1024)return(kb/1024).toFixed(0)+' MB';return kb+' KB';}
+function countFiles(nodes){if(!nodes)return 0;var c=0,stack=nodes.slice();while(stack.length){var n=stack.pop();if(n.type==='file')c++;else if(n.children)for(var i=0;i<n.children.length;i++)stack.push(n.children[i]);}return c;}
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function hlText(t,q){var safe=escHtml(t);var ql=q.toLowerCase();var i=t.toLowerCase().indexOf(ql);if(i<0)return safe;return escHtml(t.slice(0,i))+'<mark>'+escHtml(t.slice(i,i+q.length))+'</mark>'+escHtml(t.slice(i+q.length));}
+function collectCats(nodes,acc){if(!nodes)return;nodes.forEach(function(n){if(n.type==='file'){var c=getCategory(n.name);acc[c]=(acc[c]||0)+1;}else collectCats(n.children,acc);});}
+function isOldScan(d){if(!d.scannedAt)return true;return(Date.now()-new Date(d.scannedAt).getTime())/(1000*60*60*24*30)>=WARN_MONTHS;}
+function csvEscape(s){return'"'+String(s||'').replace(/"/g,'""')+'"';}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+async function init() {
+  if (window._APP_DIR) { APP_DIR = window._APP_DIR; DATA_DIR = window._DATA_DIR; }
+  if (!APP_DIR) {
+    try { var b=window.chrome.webview.hostObjects.sync.nativeBridge; APP_DIR=b.GetAppDir(); DATA_DIR=b.GetDataDir(); } catch(e) {}
+  }
+  if (!APP_DIR) {
+    try { APP_DIR=await window.chrome.webview.hostObjects.nativeBridge.GetAppDir(); DATA_DIR=await window.chrome.webview.hostObjects.nativeBridge.GetDataDir(); } catch(e) {}
+  }
+  if (!APP_DIR) {
+    await new Promise(function(r){setTimeout(r,200);});
+    if (window._APP_DIR) { APP_DIR=window._APP_DIR; DATA_DIR=window._DATA_DIR; }
+  }
+  if (!APP_DIR)  APP_DIR  = '.';
+  if (!DATA_DIR) DATA_DIR = '.\\data';
+  checkAutoLoad().catch(function(){});
+}
+
+// ── STARTUP ───────────────────────────────────────────────────────────────────
+async function checkAutoLoad() {
+  var area = document.getElementById('auto-load-area');
+  try {
+    var r = await callNative('listFiles', {path: DATA_DIR});
+    var files = r.files || [];
+    if (!files.length) { area.innerHTML=''; return; }
+    // 자동으로 열지 않고 '감지됨' 버튼으로 보여줘 사용자가 직접 선택(불러오기/새 카탈로그/열기)하게 한다.
+    // (덮어쓰기 데이터 유실은 persistCatalog의 .bak 백업으로 대비)
+    var html = files.map(function(f) {
+      var fp = DATA_DIR+'\\'+f.name;
+      var fpEsc = escPath(fp);
+      return '<button class="s-btn" onclick="loadFile(\''+fpEsc+'\')">'
+        +'<span class="s-btn-icon">💾</span>'
+        +'<div><div class="s-btn-lbl">'+escHtml(f.name)+'<span class="auto-badge">data/ 감지됨</span></div>'
+        +'<div class="s-btn-desc">최근 수정: '+escHtml(f.modified)+'</div></div></button>';
+    }).join('');
+    area.innerHTML = html+'<div class="s-divider">── 또는 ──</div>';
+  } catch(e) { area.innerHTML=''; }
+}
+
+// ── FILE OPS ──────────────────────────────────────────────────────────────────
+async function loadFile(filePath) {
+  var r; try { r=await callNative('readFile',{path:filePath}); } catch(e){alert('파일을 열 수 없습니다: '+e.message);return;}
+  if (r.error) { alert('파일을 열 수 없습니다: '+r.error); return; }
+  var raw=r.content||'', data=null;
+  try { data=JSON.parse(raw); } catch(e) {
+    var attempts=[raw.trim()+']}',raw.trim()+'}}]}',raw.trim()+']}}',raw.trim()+'"}]}'];
+    for(var i=0;i<attempts.length;i++){try{data=JSON.parse(attempts[i]);if(data&&data.drives)break;}catch(e2){data=null;}}
+    if(!data||!data.drives){
+      if(!confirm('파일이 손상되었습니다.\n부분 복구를 시도할까요?'))return;
+      data={drives:[],version:2};
+    }
+  }
+  if(!data||!Array.isArray(data.drives)){alert('올바른 .hcat 파일이 아닙니다.');return;}
+  catalog=data; currentFilePath=filePath; markDirty(false);
+  // DB 고아(카탈로그에 없는) 드라이브 정리 — dbId 있는 경우에만(구버전 보호)
+  var validIds=catalog.drives.map(function(d){return d.dbId;}).filter(function(x){return x;});
+  if(validIds.length)dbCall('dbPrune',{query:validIds.join(',')}).catch(function(){});
+  document.getElementById('file-tag').textContent=pathBasename(filePath);
+  selectedDrive=catalog.drives.length>0?catalog.drives[0]:null;
+  showApp(); renderAll();
+  if(selectedDrive)selectDrive(selectedDrive.id);else renderContent();
+}
+async function openHcatFile(){var r=await callNative('openFileDialog',{});if(!r.cancelled&&r.path)loadFile(r.path);}
+async function showToast(msg){var t=document.getElementById("app-toast");if(t)t.remove();t=document.createElement("div");t.id="app-toast";t.textContent=msg;t.style.cssText="position:fixed;left:50%;bottom:60px;transform:translateX(-50%);background:rgba(30,30,34,0.95);color:#fff;padding:10px 22px;border-radius:8px;font-size:13px;z-index:99999;box-shadow:0 4px 20px #0008;border:1px solid var(--bd);opacity:0;transition:opacity 0.2s;";document.body.appendChild(t);requestAnimationFrame(function(){t.style.opacity="1";});setTimeout(function(){t.style.opacity="0";setTimeout(function(){if(t.parentNode)t.remove();},250);},1400);}
+function showToast2(){}
+async function saveCurrentFile(){
+  if(!currentFilePath){await saveAsNewFile();return;}
+  try{
+    // 자동 백업: 저장 직전 기존 파일을 .bak로 보존
+    try{var prev=await callNative('readFile',{path:currentFilePath});if(prev&&prev.content){await callNative('writeFile',{path:currentFilePath+'.bak',content:prev.content});}}catch(be){}
+    var wr=await callNative('writeFile',{path:currentFilePath,content:JSON.stringify(catalog,null,2)});if(!wr.success)throw new Error(wr.error||'저장 실패');markDirty(false);showToast('저장되었습니다');
+    // DEF-006: catalog.db 백업은 매 저장이 아니라 앱 종료 시 1회만 수행 (저장 즉시 완료)
+  }
+  catch(e){alert('저장 실패: '+e.message);}
+}
+async function saveAsNewFile(){
+  var defaultName=currentFilePath?pathBasename(currentFilePath):'my_drives.hcat';
+  var r=await callNative('saveFileDialog',{fileName:defaultName}); if(r.cancelled)return;
+  var fp=r.path; if(!fp.endsWith('.hcat'))fp+='.hcat';
+  try{var wr=await callNative('writeFile',{path:fp,content:JSON.stringify(catalog,null,2)});if(!wr.success)throw new Error(wr.error||'저장 실패');currentFilePath=fp;document.getElementById('file-tag').textContent=pathBasename(fp);markDirty(false);}
+  catch(e){alert('저장 실패: '+e.message);}
+}
+function markDirty(dirty){
+  isDirty=dirty;
+  document.getElementById('btn-save').style.display=dirty?'inline-flex':'none';
+  var tag=document.getElementById('file-tag');
+  var base=currentFilePath?pathBasename(currentFilePath):'저장 안 됨';
+  tag.textContent=dirty?'● '+base:base;
+}
+
+// ── EXPORT: CSV ───────────────────────────────────────────────────────────────
+async function exportCSV() {
+  if (!catalog.drives.length) { alert('카탈로그가 비어 있습니다.'); return; }
+  var r = await callNative('saveFileDialog', {fileName: 'LogMapping_export.csv'});
+  if (r.cancelled) return;
+  var fp = r.path; if (!fp.endsWith('.csv')) fp += '.csv';
+  try {
+    var wr = await callNative('dbExportCsv', {path: fp}, 600000);
+    if (wr.success) alert('CSV 내보내기 완료!\n'+fp);
+    else throw new Error(wr.error||'실패');
+  } catch(e) { alert('내보내기 실패: '+e.message); }
+}
+// ── EXPORT: 모바일 뷰어 ──────────────────────────────────────────────────────
+async function exportMobileViewer() {
+  if (!catalog.drives.length) { alert('카탈로그가 비어 있습니다.'); return; }
+  var r = await callNative('saveFileDialog', {fileName: 'LogMapping_viewer.html'});
+  if (r.cancelled) return;
+  var fp = r.path; if (!fp.endsWith('.html')) fp += '.html';
+  try {
+    var wr = await callNative('dbExportViewer', {path: fp}, 600000);
+    if (wr.success) {
+      if (wr.count > 1) {
+        alert('파일이 많아 모바일에서 안전하게 열 수 있도록\n드라이브별 '+wr.count+'개 HTML로 나눠 저장했습니다.\n\n각 파일을 스마트폰으로 복사해 열면\n해당 드라이브를 탐색·검색할 수 있습니다.');
+      } else {
+        alert('모바일 뷰어 저장 완료!\n'+fp+'\n\n이 파일을 스마트폰으로 복사하거나\n공유 폴더에 놓으면 검색할 수 있습니다.');
+      }
+    } else throw new Error(wr.error||'실패');
+  } catch(e) { alert('저장 실패: '+e.message); }
+}
+// ── NAVIGATION ────────────────────────────────────────────────────────────────
+function goStartup(){
+  if(isDirty&&!confirm('저장하지 않은 변경사항이 있습니다. 홈으로 돌아갈까요?'))return;
+  document.getElementById('startup').style.display='flex';
+  document.getElementById('appwrap').style.display='none';
+  checkAutoLoad().catch(function(){});
+}
+function showApp(){document.getElementById('startup').style.display='none';document.getElementById('appwrap').style.display='flex';}
+function startFresh(){catalog={drives:[],version:2};currentFilePath=null;selectedDrive=null;markDirty(false);document.getElementById('file-tag').textContent='새 카탈로그';showApp();renderAll();renderContent();}
+
+// ── RENDER ────────────────────────────────────────────────────────────────────
+function renderAll(){renderDriveList();updateCounts();}
+
+function renderDriveList(){
+  var el=document.getElementById('drive-list');el.innerHTML='';
+  if(!catalog.drives.length){el.innerHTML='<div style="padding:18px 13px;font-size:10px;color:var(--t2);line-height:2">드라이브가 없습니다.<br>+ 드라이브 추가 버튼으로<br>첫 드라이브를 스캔하세요.</div>';return;}
+  catalog.drives.forEach(function(d){
+    var c=getDriveColor(d);var pct=Math.round((d.used||0)/(d.cap||1)*100);
+    var old=isOldScan(d);var healthClass=HEALTH_CLASS[d.healthStatus]||'';
+    var div=document.createElement('div');
+    div.className='drive-item'+(selectedDrive&&selectedDrive.id===d.id?' active':'');
+    div.style.borderLeftColor=c.bg;
+    div.onclick=function(){selectDrive(d.id);};
+    div.oncontextmenu=(function(id){return function(e){showDriveContextMenu(e,id);};})(d.id);
+    var tagsHtml=(d.tags||[]).slice(0,2).map(function(t){return'<span class="tag-mini" style="background:'+c.bg+'30;color:'+c.bg+'">'+escHtml(t)+'</span>';}).join('');
+    var warnHtml=old?'<span class="warn-badge">⚠️</span>':'';
+    var healthHtml=d.healthStatus&&d.healthStatus!=='good'?'<span class="'+healthClass+'" style="font-size:8px;margin-left:3px">'+HEALTH_LABEL[d.healthStatus]+'</span>':'';
+    div.innerHTML='<div class="dn" style="background:'+c.bg+';color:'+c.text+'">'+d.num+'</div>'
+      +'<div><div class="di-name">'+escHtml(d.name)+warnHtml+healthHtml+'</div>'
+      +'<div class="di-meta">'+fGB(d.used)+' / '+fGB(d.cap)+' · '+pct+'%'+(d.lastSeen?' · '+new Date(d.lastSeen).toLocaleDateString('ko-KR'):'')+' </div>'
+      +'<div class="di-tags">'+tagsHtml+'</div></div>';
+    el.appendChild(div);
+  });
+}
+
+function selectDrive(id){
+  selectedDrive=catalog.drives.find(function(d){return d.id===id;})||null;
+  if(selectedDrive){selectedDrive.lastSeen=new Date().toISOString();markDirty(true);}
+  searchQuery='';document.getElementById('search-input').value='';document.getElementById('search-count').textContent='';document.getElementById('search-clear-btn').style.display='none';
+  filterCat='all';document.querySelectorAll('.chip').forEach(function(c){c.classList.toggle('on',c.dataset.cat==='all');});
+  renderDriveList();switchTab('browse');
+}
+function switchTab(tab){
+  currentTab=tab;
+  ['browse','search','info','dup','dash'].forEach(function(t){document.getElementById('tab-'+t).className='tab'+(t===tab?' active':'');});
+  renderContent();
+}
+function setFilter(cat){if(filterCat===cat&&cat!=='all'){cat='all';}filterCat=cat;filterTagColor='';document.querySelectorAll('.chip').forEach(function(c){c.classList.toggle('on',c.dataset.cat===cat);});if(typeof updateTagFilterDot==='function')updateTagFilterDot();renderContent();}
+function onSort(val){sortMode=val;renderContent();}
+function showTagFilterPicker(btn){var r=btn.getBoundingClientRect();var m=_makeMenu(r.left,r.bottom+4);var A=m._ai,L=m._al;L("색상 태그 필터");A("전체 표시",function(){filterTagColor="";if(filterCat==="tag")filterCat="all";document.querySelectorAll(".chip").forEach(function(c){c.classList.toggle("on",c.dataset.cat===filterCat);});updateTagFilterDot();renderContent();});var row=document.createElement("div");row.style.cssText="padding:6px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;";TAG_COLORS.forEach(function(tc){if(!tc.val)return;var d=document.createElement("div");d.style.cssText="width:20px;height:20px;border-radius:50%;background:"+tc.val+";cursor:pointer;flex-shrink:0;border:2px solid "+(filterTagColor===tc.val?"#fff":"transparent")+";box-sizing:border-box;";d.title=tc.name;d.addEventListener("click",function(ev){ev.stopPropagation();m.remove();filterTagColor=tc.val;filterCat="tag";document.querySelectorAll(".chip").forEach(function(c){c.classList.remove("on");});updateTagFilterDot();renderContent();});row.appendChild(d);});m.appendChild(row);}
+function updateTagFilterDot(){var chip=document.getElementById("chip-tag");if(!chip)return;if(filterCat==="tag"&&filterTagColor){chip.style.background=filterTagColor;chip.style.color="#fff";chip.style.borderColor=filterTagColor;}else{chip.style.background="";chip.style.color="";chip.style.borderColor="";}}
+function renderContent(){
+  var el=document.getElementById('content');
+  if(currentTab==='dash'){renderDash(el);return;}
+  if(currentTab==='dup'){renderDuplicates(el);return;}
+  if(!selectedDrive){el.innerHTML='<div class="empty-state"><div class="empty-icon">💽</div><p>왼쪽에서 드라이브를 선택하거나<br>새 드라이브를 추가하세요.</p></div>';return;}
+  if(currentTab==='browse')renderBrowse(el);
+  else if(currentTab==='search')renderSearch(el);
+  else renderInfo(el);
+}
+
+// ── 전체 통계 대시보드 ────────────────────────────────────────────────────────
+function renderDash(el){
+  if(!catalog.drives.length){el.innerHTML='<div class="no-res">드라이브가 없습니다.</div>';return;}
+  var totalCap=0,totalUsed=0,totalFiles=0;
+  var catAll={video:0,image:0,audio:0,doc:0,design:0,other:0};
+  var oldDrives=[];
+  catalog.drives.forEach(function(d){totalCap+=d.cap||0;totalUsed+=d.used||0;totalFiles+=(d.fileCount||0);var dc=d.cats||{};Object.keys(catAll).forEach(function(k){catAll[k]+=dc[k]||0;});if(isOldScan(d))oldDrives.push(d);});
+  var totalPct=totalCap?Math.round(totalUsed/totalCap*100):0;
+  var maxCat=Math.max.apply(null,Object.values(catAll))||1;
+  var warnHtml=oldDrives.length?'<div class="warn-box">⚠️ <div><b>'+oldDrives.map(function(d){return d.num+'번 ('+escHtml(d.name)+')';}).join(', ')+'</b> 드라이브가 '+WARN_MONTHS+'개월 이상 스캔되지 않았습니다.</div></div>':'';
+  var catRows=Object.entries(catAll).map(function(e){var cat=e[0],cnt=e[1];return'<div class="cat-bar-row"><span class="cat-bar-name">'+EXT_ICONS[cat]+' '+CAT_LABELS[cat]+'</span><div class="cat-bar-track"><div class="cat-bar-fill" style="width:'+Math.round(cnt/maxCat*100)+'%;background:'+EXT_COLORS[cat]+'"></div></div><span class="cat-bar-cnt">'+cnt.toLocaleString()+'개</span></div>';}).join('');
+  var driveRows=catalog.drives.map(function(d){var c=getDriveColor(d);var pct=d.cap?Math.round(d.used/d.cap*100):0;var old=isOldScan(d);return'<div style="margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:11px"><span style="background:'+c.bg+';color:'+c.text+';width:20px;height:20px;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0">'+d.num+'</span><span style="flex:1;color:var(--t0)">'+escHtml(d.name)+'</span>'+(old?'<span style="color:var(--warn);font-size:10px">⚠️</span>':'')+'<span style="color:var(--t2);font-size:10px">'+fGB(d.used)+' / '+fGB(d.cap)+' · '+pct+'%</span></div><div class="bar-bg" style="height:5px"><div class="bar-fill" style="width:'+pct+'%;background:'+c.bg+'"></div></div></div>';}).join('');
+  el.innerHTML=warnHtml+'<div class="dash-grid"><div class="dash-card"><div class="dash-val">'+catalog.drives.length+'</div><div class="dash-lbl">드라이브</div></div><div class="dash-card"><div class="dash-val">'+fGB(totalCap)+'</div><div class="dash-lbl">총 용량</div></div><div class="dash-card"><div class="dash-val">'+fGB(totalUsed)+'</div><div class="dash-lbl">사용 중 · '+totalPct+'%</div></div><div class="dash-card"><div class="dash-val">'+totalFiles.toLocaleString()+'</div><div class="dash-lbl">전체 파일</div></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div><div class="cat-title">파일 종류별 합산</div>'+catRows+'</div><div><div class="cat-title">드라이브별 용량</div>'+driveRows+'</div></div>';
+}
+
+// ── 중복 파일 감지 ────────────────────────────────────────────────────────────
+function renderDuplicates(el) {
+  if (!catalog.drives.length) { el.innerHTML='<div class="no-res">드라이브가 없습니다.</div>'; return; }
+  el.innerHTML='<div class="no-res">중복 파일 분석 중...</div>';
+  // 통계는 전수 쿼리(정확), 표시 목록은 표본(프리징 방지)으로 분리
+  Promise.all([dbCall('dbDuplicates',{limit:8000}),dbCall('dbDuplicateStats',{})]).then(function(rr){
+    var rows=dbRows(rr[0]);
+    var st=dbRows(rr[1])[0]||{groups:0,wastedKB:0};
+    if(!st.groups){el.innerHTML='<div class="empty-state"><div class="empty-icon">✅</div><p>중복 파일이 없습니다.<br>모든 파일이 고유합니다.</p></div>';return;}
+    // name|size 로 그룹핑 (표시용 표본)
+    var groups={},order=[];
+    rows.forEach(function(f){var k=f.name.toLowerCase()+'|'+f.size;if(!groups[k]){groups[k]=[];order.push(k);}groups[k].push(f);});
+    var dups=order.map(function(k){return groups[k];}).filter(function(g){return g.length>=2;});
+    var shownNote=(st.groups>dups.length)?(' · 상위 '+dups.length+'개 그룹 표시'):'';
+    var html='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
+      +'<div><div style="font-size:16px;font-weight:700;color:var(--t0)">'+st.groups.toLocaleString()+'개 중복 그룹</div>'
+      +'<div style="font-size:10px;color:var(--t2);margin-top:2px">절약 가능 용량: '+fSZ(st.wastedKB)+shownNote+'</div></div></div>';
+    html+=dups.slice(0,300).map(function(g){
+      var cat=getCategory(g[0].name),color=EXT_COLORS[cat];
+      var items=g.map(function(f){
+        var drive=driveByDbId(f.drive_id);var dc=getDriveColor({color:drive?drive.color:''});
+        var pathEsc=escPath(f.full_path);
+        return '<div class="dup-file">'
+          +'<span style="color:'+dc.bg+';font-size:9px;font-weight:700;border:0.5px solid '+dc.bg+';border-radius:3px;padding:1px 5px;flex-shrink:0">['+f.driveNum+'번]</span>'
+          +'<span style="flex:1;color:var(--t2);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(f.full_path)+'</span>'
+          +'<button class="copy-btn" onclick="copyClip(\''+pathEsc+'\', this)">경로 복사</button></div>';
+      }).join('');
+      return '<div class="dup-group"><div class="dup-head"><span style="color:'+color+';font-size:13px">'+EXT_ICONS[cat]+'</span>'
+        +'<span style="flex:1">'+escHtml(g[0].name)+'</span>'
+        +'<span style="font-size:10px;color:var(--t2)">'+fSZ(g[0].size)+' · '+g.length+'곳</span></div>'+items+'</div>';
+    }).join('');
+    if(dups.length>300)html+='<div class="no-res">... 외 '+(dups.length-300)+'개 그룹</div>';
+    el.innerHTML=html;
+  });
+}
+function collectFlat(nodes, drive, prefix, out) {
+  if (!nodes) return;
+  var stack=[{nodes:nodes,prefix:prefix}];
+  while(stack.length){var fr=stack.pop(),ns=fr.nodes,px=fr.prefix;for(var i=0;i<ns.length;i++){var n=ns[i];if(n.type==='file')out.push({name:n.name,size:n.size,driveNum:drive.num,driveColor:drive.color||'gray',path:px+n.name});else if(n.children)stack.push({nodes:n.children,prefix:px+n.name+'/'});}}
+}
+async function copyClip(text, btn) {
+  await callNative('copyToClipboard', {content: text});
+  var orig = btn.textContent; btn.textContent='✓ 복사됨'; btn.classList.add('copied');
+  setTimeout(function(){ btn.textContent=orig; btn.classList.remove('copied'); }, 1500);
+}
+
+// ── BROWSE / 가상 스크롤 ──────────────────────────────────────────────────────
+function getFilteredTree(nodes,parentKey){
+  parentKey=parentKey||'';
+  if(filterCat==='all')return nodes;
+  if(filterCat==='tag'&&filterTagColor!==undefined){
+    var ic=selectedDrive&&selectedDrive.itemColors?selectedDrive.itemColors:{};
+    return(nodes||[]).reduce(function(acc,node){
+      var k=(selectedDrive?selectedDrive.id+'/':'')+parentKey+(parentKey?'/':'')+node.name;
+      if(node.type==='file'){if(ic[k]===filterTagColor)acc.push(node);}
+      else{var ch=getFilteredTree(node.children||[],parentKey+(parentKey?'/':'')+node.name);if(ch.length)acc.push(Object.assign({},node,{children:ch}));}
+      return acc;
+    },[]);
+  }
+  if(filterCat==='folder'){
+    return(nodes||[]).reduce(function(acc,node){
+      if(node.type==='dir'){var ch=getFilteredTree(node.children||[]);acc.push(Object.assign({},node,{children:ch}));}
+      return acc;
+    },[]);
+  }
+  return(nodes||[]).reduce(function(acc,node){if(node.type==='file'){if(getCategory(node.name)===filterCat)acc.push(node);}else{var ch=getFilteredTree(node.children||[]);if(ch.length)acc.push(Object.assign({},node,{children:ch}));}return acc;},[]);
+}
+function sortNodes(nodes){
+  var dirs=nodes.filter(function(n){return n.type==='dir';}),files=nodes.filter(function(n){return n.type==='file';});
+  if(sortMode==='name-asc'){dirs.sort(function(a,b){return a.name.localeCompare(b.name,'ko');});files.sort(function(a,b){return a.name.localeCompare(b.name,'ko');});}
+  if(sortMode==='name-desc'){dirs.sort(function(a,b){return b.name.localeCompare(a.name,'ko');});files.sort(function(a,b){return b.name.localeCompare(a.name,'ko');});}
+  if(sortMode==='size-desc')files.sort(function(a,b){return b.size-a.size;});
+  if(sortMode==='size-asc')files.sort(function(a,b){return a.size-b.size;});
+  return dirs.concat(files);
+}
+
+const VROW_H=22,VBUFFER=40;
+var vFlatRows=[],_vtreeContainer=null,_vscrollEl=null,_vrafId=null;
+
+// 지연 로딩: treeCache의 자식만 평탄화. 없으면 pending에 담아 비동기 로드 유도
+function sortChildren(arr){
+  var a=arr.slice();
+  if(sortMode==='size-desc')a.sort(function(x,y){return (y.is_dir-x.is_dir)|| (y.size-x.size);});
+  else if(sortMode==='size-asc')a.sort(function(x,y){return (y.is_dir-x.is_dir)||(x.size-y.size);});
+  else if(sortMode==='name-desc')a.sort(function(x,y){return (y.is_dir-x.is_dir)||y.name.localeCompare(x.name,'ko');});
+  else a.sort(function(x,y){return (y.is_dir-x.is_dir)||x.name.localeCompare(y.name,'ko');});
+  return a;
+}
+function flattenLazy(dbId,parentPath,depth,rows,pending){
+  var children=treeCache[ckey(dbId,parentPath)];
+  if(children===undefined){ pending.push(parentPath); return; }
+  var sorted=sortChildren(children);
+  for(var i=0;i<sorted.length;i++){
+    var node=sorted[i];var key=dbId+'|'+node.full_path;
+    rows.push({node:node,depth:depth,key:key});
+    if(node.is_dir&&treeState[key]===true) flattenLazy(dbId,node.full_path,depth+1,rows,pending);
+  }
+}
+function buildRow(item){
+  var node=item.node,depth=item.depth,key=item.key;
+  var isDir=!!node.is_dir;
+  var div=document.createElement('div');div.className='tree-item';
+  div.dataset.key=key;div.dataset.dtype=(isDir?'dir':'file');
+  var rowH=getRowH();
+  var isLarge=(viewMode==='large'),isNormal=(viewMode==='normal'),isDetail=(viewMode==='detail');
+  var fsMul=isLarge?2.0:isNormal?1.5:1.0;
+  div.style.cssText='padding-left:'+(4+depth*15)+'px;position:absolute;left:0;right:0;height:'+rowH+'px;display:flex;align-items:center;gap:5px';
+  var itemColor=node.color||'';
+  var colorDot=isDetail&&itemColor?'<span style="width:10px;height:10px;border-radius:50%;background:'+itemColor+';flex-shrink:0;display:inline-block;"></span>':'';
+  if(isDir){
+    var open=treeState[key]===true;
+    var tgSz=Math.round(16*fsMul)+'px';
+    var icSz=Math.round(14*fsMul)+'px';
+    var nmSz=Math.round(12*fsMul)+'px';
+    var cntHtml='<span class="sz">'+(node.childCount||0)+'개</span>';
+    div.innerHTML='<span style="font-size:'+tgSz+';width:'+tgSz+';text-align:center;flex-shrink:0;color:var(--t2)">'+(open?'▾':'▸')+'</span>'
+      +'<span style="font-size:'+icSz+';flex-shrink:0">'+(open?'📂':'📁')+'</span>'
+      +'<span class="nm" style="font-size:'+nmSz+'px">'+escHtml(node.name)+'</span>'
+      +colorDot+cntHtml;
+    div.onclick=(function(k,o){return function(e){e.stopPropagation();treeState[k]=!o;rebuildVTree();};})(key,open);
+  } else {
+    var cat=getCategory(node.name),color=EXT_COLORS[cat],ext=node.name.split('.').pop().toUpperCase();
+    var icSz2=Math.round(11*fsMul)+'px';
+    var nmSz2=Math.round(12*fsMul)+'px';
+    var sizeHtml=isDetail?'<span class="sz" style="margin-left:4px">'+fSZ(node.size)+'</span>':'';
+    var badgeHtml=isDetail?'<span class="ext-badge" style="background:'+color+'25;color:'+color+'">'+ext+'</span>':'';
+    var mtimeHtml=(isDetail&&node.mtime)?'<span class="sz" style="margin-left:6px;color:var(--t2)">'+node.mtime+'</span>':'';
+    div.innerHTML='<span style="font-size:'+(Math.round(16*fsMul))+'px;width:'+(Math.round(16*fsMul))+'px;flex-shrink:0"></span>'
+      +'<span style="color:'+color+';font-size:'+icSz2+';flex-shrink:0;width:14px;text-align:center">'+EXT_ICONS[cat]+'</span>'
+      +'<span class="nm" style="font-size:'+nmSz2+'px">'+escHtml(node.name)+'</span>'
+      +colorDot+badgeHtml+sizeHtml+mtimeHtml;
+  }
+  div.oncontextmenu=(function(k,dt,fp){return function(e){e.preventDefault();e.stopPropagation();showItemCtxMenu(e,k,dt,fp);};})(key,isDir?'dir':'file',node.full_path);
+  return div;
+}
+
+function getRowH(){return viewMode==='large'?44:viewMode==='normal'?33:VROW_H;}
+function rebuildVTree(){
+  if(!selectedDrive||!selectedDrive.dbId){vFlatRows=[];if(_vtreeContainer){_vtreeContainer.style.height='0px';renderVisibleRows();}return;}
+  var dbId=selectedDrive.dbId,pending=[];vFlatRows=[];
+  flattenLazy(dbId,'',0,vFlatRows,pending);
+  if(pending.length){
+    Promise.all(pending.map(function(pp){return loadChildren(dbId,pp);})).then(rebuildVTree);
+    return;
+  }
+  if(_vtreeContainer)_vtreeContainer.style.height=(vFlatRows.length*getRowH()+10)+'px';
+  renderVisibleRows();
+}
+
+// ── 컨텍스트 메뉴 ────────────────────────────────────────────────────────────
+var TAG_COLORS=[{name:"없음",val:"",css:"#555"},{name:"빨강",val:"#ff3b30",css:"#ff3b30"},{name:"주황",val:"#ff9500",css:"#ff9500"},{name:"노랑",val:"#ffcc00",css:"#ffcc00"},{name:"초록",val:"#34c759",css:"#34c759"},{name:"파랑",val:"#007aff",css:"#007aff"},{name:"보라",val:"#af52de",css:"#af52de"},{name:"회색",val:"#8e8e93",css:"#8e8e93"}];
+function _makeMenu(x,y){var ex=document.getElementById("tree-ctx-menu");if(ex)ex.remove();var m=document.createElement("div");m.id="tree-ctx-menu";m.style.cssText="position:fixed;left:"+x+"px;top:"+y+"px;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:4px 0;z-index:9999;min-width:170px;box-shadow:0 4px 16px #0006;font-size:12px;";function ai(label,fn,dis){var d=document.createElement("div");d.style.cssText="padding:7px 16px;cursor:"+(dis?"default":"pointer")+";color:"+(dis?"var(--t2)":"var(--t0)")+";white-space:nowrap;user-select:none;display:flex;align-items:center;gap:8px;";d.innerHTML=label;if(!dis&&fn){d.addEventListener("mouseenter",function(){d.style.background="var(--bg3)";});d.addEventListener("mouseleave",function(){d.style.background="";});d.addEventListener("click",function(ev){ev.stopPropagation();m.remove();fn();});}m.appendChild(d);}function as(){var s=document.createElement("div");s.style.cssText="height:1px;background:var(--bd);margin:4px 0";m.appendChild(s);}function al(t){var s=document.createElement("div");s.style.cssText="padding:4px 12px;color:var(--t2);font-size:10px;font-weight:600";s.textContent=t;m.appendChild(s);}m._ai=ai;m._as=as;m._al=al;document.body.appendChild(m);setTimeout(function(){function rm(ev){if(!m.contains(ev.target)){m.remove();document.removeEventListener("click",rm);}}document.addEventListener("click",rm);},10);return m;}
+function showSpaceCtxMenu(e){var m=_makeMenu(e.clientX,e.clientY);var A=m._ai,L=m._al;L("보기 방식");[["large","큰 크기"],["normal","보통 크기"],["small","작은 크기"],["detail","자세히"]].forEach(function(v){A((viewMode===v[0]?"✓ ":"   ")+v[1],function(){viewMode=v[0];rebuildVTree();});});}
+function showViewModeMenu(btn){var r=btn.getBoundingClientRect();var m=_makeMenu(r.left,r.bottom+4);var A=m._ai,L=m._al;L("보기 방식");[["large","큰 크기"],["normal","보통 크기"],["small","작은 크기"],["detail","자세히"]].forEach(function(v){A((viewMode===v[0]?"✓ ":"   ")+v[1],function(){viewMode=v[0];rebuildVTree();});});}
+function showItemCtxMenu(e,key,dtype,fullPath){var m=_makeMenu(e.clientX,e.clientY);var A=m._ai,S=m._as,L=m._al;var path=fullPath||'';var copyPath=path.replace(/\//g,'\\');A("📋 경로 복사",function(){callNative('copyToClipboard',{content:copyPath});showToast('경로 복사됨');});S();L("색상 태그");var tr=document.createElement("div");tr.style.cssText="padding:6px 16px;display:flex;gap:8px;align-items:center;";var pp=path.indexOf('/')>=0?path.substring(0,path.lastIndexOf('/')):'';var arr=(selectedDrive&&treeCache[ckey(selectedDrive.dbId,pp)])||[];var itc=arr.find(function(x){return x.full_path===path;});var cur=itc?(itc.color||""):"";TAG_COLORS.forEach(function(tc){var d=document.createElement("div");d.style.cssText="width:18px;height:18px;border-radius:50%;background:"+(tc.val||"transparent")+";cursor:pointer;flex-shrink:0;border:2px solid "+(cur===tc.val?"#fff":"transparent")+";box-sizing:border-box;"+(tc.val?"":"border:2px dashed #666;");d.title=tc.name;d.addEventListener("click",function(ev){ev.stopPropagation();m.remove();setItemColor(path,tc.val);});tr.appendChild(d);});m.appendChild(tr);S();L("보기 방식");[["large","큰 크기"],["normal","보통 크기"],["small","작은 크기"],["detail","자세히"]].forEach(function(v){A((viewMode===v[0]?"✓ ":"   ")+v[1],function(){viewMode=v[0];rebuildVTree();});});}
+function setItemColor(fullPath,color){if(!selectedDrive||!selectedDrive.dbId)return;dbCall('dbSetColor',{driveId:selectedDrive.dbId,path:fullPath,color:color||''}).then(function(){var pp=fullPath.indexOf('/')>=0?fullPath.substring(0,fullPath.lastIndexOf('/')):'';var arr=treeCache[ckey(selectedDrive.dbId,pp)];if(arr){var it=arr.find(function(x){return x.full_path===fullPath;});if(it)it.color=color||null;}rebuildVTree();});}
+function renderVisibleRows(){
+  if(!_vtreeContainer||!_vscrollEl)return;
+  var scrollTop=_vscrollEl.scrollTop,viewH=_vscrollEl.clientHeight;
+  var rh=getRowH();
+  var startIdx=Math.max(0,Math.floor(scrollTop/rh)-VBUFFER),endIdx=Math.min(vFlatRows.length,Math.ceil((scrollTop+viewH)/rh)+VBUFFER);
+  while(_vtreeContainer.firstChild)_vtreeContainer.removeChild(_vtreeContainer.firstChild);
+  for(var i=startIdx;i<endIdx;i++){var row=buildRow(vFlatRows[i]);row.style.top=(i*rh)+'px';_vtreeContainer.appendChild(row);}
+}
+function renderBrowse(el){
+  if(!selectedDrive||!selectedDrive.dbId){el.innerHTML='<div class="no-res">스캔된 파일이 없습니다.</div>';return;}
+  if(filterCat!=='all'){renderFilteredFlat(el);return;}
+  var warnHtml=isOldScan(selectedDrive)?'<div class="warn-box">⚠️ 이 드라이브는 '+WARN_MONTHS+'개월 이상 스캔되지 않았습니다.</div>':'';
+  el.innerHTML='<div style="display:flex;flex-direction:column;height:100%">'+warnHtml+'<div id="vscroll-wrap" style="position:relative;flex:1;min-height:0;overflow-y:auto"><div id="vtree-inner" style="position:relative;width:100%;padding-right:44px;box-sizing:border-box"></div></div></div>';
+  var inner=document.getElementById('vtree-inner');
+  _vtreeContainer=inner;_vscrollEl=document.getElementById('vscroll-wrap');
+  _vscrollEl.onscroll=function(){if(_vrafId)cancelAnimationFrame(_vrafId);_vrafId=requestAnimationFrame(renderVisibleRows);};
+  _vscrollEl.addEventListener('contextmenu',function(e){var row=e.target.closest('[data-key]');if(!row){e.preventDefault();showSpaceCtxMenu(e);}});
+  // 루트 자식이 캐시에 없으면 로드 후 렌더
+  if(treeCache[ckey(selectedDrive.dbId,'')]===undefined) loadChildren(selectedDrive.dbId,'').then(rebuildVTree);
+  else rebuildVTree();
+}
+// 분류/태그 필터: DB에서 평면 목록 조회 후 공통 렌더
+function renderFilteredFlat(el){
+  if(!selectedDrive||!selectedDrive.dbId){el.innerHTML='<div class="no-res">스캔된 파일이 없습니다.</div>';return;}
+  el.innerHTML='<div class="no-res">불러오는 중...</div>';
+  if(filterCat==='tag'){
+    if(!filterTagColor){el.innerHTML='<div class="no-res">상단 🏷 태그 버튼에서 색상을 선택하세요.</div>';return;}
+    dbCall('dbFilesByColor',{driveId:selectedDrive.dbId,color:filterTagColor,limit:200000}).then(function(res){renderFlatList(el,dbRows(res),'색상 태그');});
+  } else if(EXT_MAP[filterCat]){
+    dbCall('dbByExts',{driveId:selectedDrive.dbId,query:EXT_MAP[filterCat].join(','),limit:200000}).then(function(res){renderFlatList(el,dbRows(res),CAT_LABELS[filterCat]||filterCat);});
+  } else if(filterCat==='other'){
+    var allExts=[];for(var k in EXT_MAP)allExts=allExts.concat(EXT_MAP[k]);
+    dbCall('dbByExts',{driveId:selectedDrive.dbId,query:'!'+allExts.join(','),limit:200000}).then(function(res){renderFlatList(el,dbRows(res),'기타');});
+  } else if(filterCat==='folder'){
+    el.innerHTML='<div class="no-res">폴더 목록 불러오는 중...</div>';
+    dbCall('dbFolders',{driveId:selectedDrive.dbId,limit:50000}).then(function(res){renderFlatList(el,dbRows(res),'폴더 목록');});
+  } else {
+    el.innerHTML='<div class="no-res">\'전체\' 보기 또는 상단 검색을 이용하세요.</div>';
+  }
+}
+// ── 평면 목록 가상 스크롤 엔진 (검색/분류/태그 공용) ──────────────────────────
+var FL_ROWH=42,FL_BUF=14;
+var _fl={rows:[],q:'',scroll:null,inner:null,raf:null};
+function renderFlatList(el,rows,title){ mountFlatList(el,rows,title,''); }
+function mountFlatList(el,rows,title,query){
+  if(!rows||!rows.length){el.innerHTML='<div class="no-res">해당하는 파일이 없습니다.</div>';return;}
+  _fl.rows=rows; _fl.q=query||'';
+  el.innerHTML='<div style="display:flex;flex-direction:column;height:100%"><div class="sec-title" style="flex-shrink:0">'+escHtml(title||'결과')+' · '+rows.length.toLocaleString()+'개</div>'
+    +'<div id="fl-scroll" style="position:relative;flex:1;min-height:0;overflow-y:auto"><div id="fl-inner" style="position:relative;width:100%"></div></div></div>';
+  _fl.scroll=document.getElementById('fl-scroll');
+  _fl.inner=document.getElementById('fl-inner');
+  _fl.inner.style.height=(rows.length*FL_ROWH+8)+'px';
+  _fl.scroll.onscroll=function(){if(_fl.raf)cancelAnimationFrame(_fl.raf);_fl.raf=requestAnimationFrame(renderFlatVisible);};
+  renderFlatVisible();
+}
+function renderFlatVisible(){
+  if(!_fl.scroll||!_fl.inner)return;
+  var st=_fl.scroll.scrollTop,vh=_fl.scroll.clientHeight;
+  var s=Math.max(0,Math.floor(st/FL_ROWH)-FL_BUF),e=Math.min(_fl.rows.length,Math.ceil((st+vh)/FL_ROWH)+FL_BUF);
+  while(_fl.inner.firstChild)_fl.inner.removeChild(_fl.inner.firstChild);
+  for(var i=s;i<e;i++){var d=buildFlatRow(_fl.rows[i],_fl.q);d.style.position='absolute';d.style.top=(i*FL_ROWH)+'px';d.style.left='0';d.style.right='0';_fl.inner.appendChild(d);}
+}
+function buildFlatRow(f,q){
+  var isDir=!!f.is_dir,cat=getCategory(f.name),color=EXT_COLORS[cat];
+  var fpEsc=escPath(f.full_path);
+  var did=f.drive_id||(selectedDrive?selectedDrive.dbId:0);
+  var div=document.createElement('div');
+  div.style.cssText='box-sizing:border-box;height:'+FL_ROWH+'px;padding:5px 14px 5px 10px;border-bottom:0.5px solid var(--bd);cursor:pointer;overflow:hidden';
+  var nameHtml=q?hlText(f.name,q):escHtml(f.name);
+  var mt=f.mtime?'<span style="flex-shrink:0;font-size:10px;color:var(--t2);margin-left:6px">'+f.mtime+'</span>':'';
+  div.innerHTML='<div style="display:flex;align-items:center;gap:8px;line-height:1.3">'
+    +'<span style="color:'+(isDir?'var(--t1)':color)+';flex-shrink:0;width:15px;text-align:center;font-size:12px">'+(isDir?'📁':EXT_ICONS[cat])+'</span>'
+    +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--t0)">'+nameHtml+'</span>'
+    +'<span style="flex-shrink:0;font-size:10px;color:var(--t2)">'+fSZ(f.size)+'</span>'+mt
+    +'<button class="copy-btn" style="flex-shrink:0" onclick="event.stopPropagation();copyClip(\''+fpEsc+'\',this)">경로 복사</button></div>'
+    +'<div style="margin-top:1px;padding-left:23px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(f.full_path)+'</div>';
+  // 좌클릭: 폴더면 내부 탐색, 파일이면 경로 복사
+  if(isDir){
+    div.onclick=(function(d,p){return function(){openFlatFolder(d,p);};})(did,f.full_path);
+  } else {
+    div.onclick=(function(p,btn){return function(){copyClip(p.replace(/\//g,'\\'),btn);};})(f.full_path,div.querySelector('.copy-btn'));
+  }
+  // 우클릭: 컨텍스트 메뉴 (경로 복사 / 색상 태그 / 보기 방식)
+  div.oncontextmenu=(function(key,dtype,fp){return function(e){e.preventDefault();e.stopPropagation();showFlatCtxMenu(e,key,dtype,fp);};})(did+'|'+f.full_path,isDir?'dir':'file',f.full_path);
+  return div;
+}
+// 분류/폴더 평면뷰에서 폴더 클릭 → 해당 폴더의 자식 목록 표시
+function openFlatFolder(dbId,folderPath){
+  var el=document.getElementById('content');
+  if(!el)return;
+  el.innerHTML='<div class="no-res">불러오는 중...</div>';
+  loadChildren(dbId,folderPath).then(function(rows){
+    var parentPath=folderPath.indexOf('/')>=0?folderPath.substring(0,folderPath.lastIndexOf('/')):'';
+    var isRoot=(folderPath==='');
+    var parentEsc=escPath(parentPath);
+    // 네비 바 HTML (← 위로 | 🏠 최상위 | 경로)
+    var navHtml=isRoot?'':'<div id="flat-nav" style="flex-shrink:0;padding:5px 12px;border-bottom:1px solid var(--bd);font-size:11px;color:var(--t2);display:flex;align-items:center;gap:10px;background:var(--bg1)">'
+      +'<span style="cursor:pointer;color:var(--t2)" onclick="openFlatFolder('+dbId+',\'\')">🏠 최상위</span>'
+      +'<span style="cursor:pointer;color:var(--acc)" onclick="openFlatFolder('+dbId+',\''+parentEsc+'\')">← 위로</span>'
+      +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t1)">'+escHtml(folderPath)+'</span>'
+      +'</div>';
+    // 목록 영역 (flex로 남은 높이 전부 사용 → 하단 겹침 없음)
+    var listHtml=rows&&rows.length
+      ?'<div id="flat-nav-title" class="sec-title" style="flex-shrink:0">'+(folderPath.split('/').pop()||'루트')+' · '+rows.length.toLocaleString()+'개</div>'
+       +'<div id="fl-scroll" style="position:relative;flex:1;min-height:0;overflow-y:auto"><div id="fl-inner" style="position:relative;width:100%"></div></div>'
+      :'<div class="no-res">비어 있는 폴더입니다.</div>';
+    el.innerHTML='<div style="display:flex;flex-direction:column;height:100%">'+navHtml+listHtml+'</div>';
+    if(rows&&rows.length){
+      _fl.rows=rows;_fl.q='';
+      _fl.scroll=document.getElementById('fl-scroll');
+      _fl.inner=document.getElementById('fl-inner');
+      _fl.inner.style.height=(rows.length*FL_ROWH+8)+'px';
+      _fl.scroll.onscroll=function(){if(_fl.raf)cancelAnimationFrame(_fl.raf);_fl.raf=requestAnimationFrame(renderFlatVisible);};
+      renderFlatVisible();
+    }
+  });
+}
+// 평면뷰 전용 컨텍스트 메뉴 (경로 복사 + 색상 태그 + 보기 방식)
+function showFlatCtxMenu(e,key,dtype,fp){
+  var m=_makeMenu(e.clientX,e.clientY);var A=m._ai,S=m._as,L=m._al;
+  var copyPath=(fp||'').replace(/\//g,'\\');
+  A('📋 경로 복사',function(){callNative('copyToClipboard',{content:copyPath});showToast('경로 복사됨');});
+  S();L('색상 태그');
+  var tr=document.createElement('div');tr.style.cssText='padding:6px 16px;display:flex;gap:8px;align-items:center;';
+  TAG_COLORS.forEach(function(tc){
+    var d=document.createElement('div');
+    d.style.cssText='width:18px;height:18px;border-radius:50%;background:'+(tc.val||'transparent')+';cursor:pointer;flex-shrink:0;border:2px solid transparent;box-sizing:border-box;'+(tc.val?'':'border:2px dashed #666;');
+    d.title=tc.name;
+    d.addEventListener('click',function(ev){ev.stopPropagation();m.remove();setItemColor(fp,tc.val);if(typeof renderFlatVisible==='function')renderFlatVisible();});
+    tr.appendChild(d);
+  });
+  m.appendChild(tr);
+  S();L('보기 방식');
+  [['large','큰 크기'],['normal','보통 크기'],['small','작은 크기'],['detail','자세히']].forEach(function(v){
+    A((viewMode===v[0]?'✓ ':'   ')+v[1],function(){viewMode=v[0];renderContent();});
+  });
+}
+
+// ── SEARCH ────────────────────────────────────────────────────────────────────
+function doSearch(){
+  searchQuery=document.getElementById('search-input').value.trim();
+  document.getElementById('search-clear-btn').style.display=searchQuery?'':'none';
+  switchTab('search');
+}
+function clearSearch(){
+  searchQuery='';
+  document.getElementById('search-input').value='';
+  document.getElementById('search-clear-btn').style.display='none';
+  var sc=document.getElementById('search-count');if(sc)sc.textContent='';
+  if(currentTab==='search')switchTab('browse');
+}
+function driveByDbId(id){return catalog.drives.find(function(d){return d.dbId===id;})||{color:'gray'};}
+// 검색 결과 클릭 → 파일 탐색에서 해당 경로까지 펼치기
+function openInTree(dbId, fullPath, isDir){
+  var d=catalog.drives.find(function(x){return x.dbId===dbId;});
+  if(!d)return;
+  var parts=fullPath.split('/');
+  var toExpand=isDir?parts.slice():parts.slice(0,-1);
+  var cum='';
+  toExpand.forEach(function(p){cum=cum?cum+'/'+p:p;treeState[dbId+'|'+cum]=true;});
+  selectedDrive=d;filterCat='all';
+  document.querySelectorAll('.chip').forEach(function(c){c.classList.toggle('on',c.dataset.cat==='all');});
+  renderDriveList();switchTab('browse');
+}
+function renderSearch(el){
+  if(!searchQuery.trim()){el.innerHTML='<div class="no-res">검색어를 입력하면 모든 드라이브에서 찾습니다.</div>';return;}
+  el.innerHTML='<div class="no-res">검색 중...</div>';
+  var qSnapshot=searchQuery;
+  dbCall('dbSearch',{query:searchQuery,limit:50000}).then(function(res){
+    if(qSnapshot!==searchQuery)return; // 입력이 바뀌면 무시
+    var rows=dbRows(res);
+    if(filterCat!=='all'&&filterCat!=='folder'&&filterCat!=='tag'){rows=rows.filter(function(f){return f.is_dir||getCategory(f.name)===filterCat;});}
+    else if(filterCat==='folder'){rows=rows.filter(function(f){return f.is_dir;});}
+    if(!rows.length){el.innerHTML='<div class="no-res">"'+escHtml(searchQuery)+'"에 대한 결과가 없습니다.</div>';return;}
+    // 관련도순 정렬: 정확 일치 > 시작 일치 > 포함, 그다음 짧은 이름순
+    var _ql=searchQuery.toLowerCase();
+    function _scr(n){n=(n||'').toLowerCase();if(n===_ql)return 3;if(n.indexOf(_ql)===0)return 2;return 1;}
+    rows.sort(function(a,b){return _scr(b.name)-_scr(a.name)||(a.name.length-b.name.length)||a.name.localeCompare(b.name,'ko');});
+    // 가상 스크롤로 렌더 (대량 결과도 프리징 없음)
+    mountFlatList(el,rows,'검색 결과',searchQuery);
+  });
+}
+
+// ── INFO + 재스캔 ─────────────────────────────────────────────────────────────
+function renderInfo(el){
+  var d=selectedDrive,c=getDriveColor(d);
+  var pct=d.cap?Math.round(d.used/d.cap*100):0,free=(d.cap||0)-(d.used||0);
+  var total=d.fileCount||0;
+  var scanned=d.scannedAt?new Date(d.scannedAt).toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric'}):'–';
+  var catCounts=d.cats||{};
+  var old=isOldScan(d);
+  var warnHtml=old?'<div class="warn-box">⚠️ 마지막 스캔: '+scanned+' — '+WARN_MONTHS+'개월 이상 지났습니다. 재스캔을 권장합니다.</div>':'';
+  var catRows=Object.entries(catCounts).filter(function(e){return e[1]>0;}).map(function(e){var cat=e[0],cnt=e[1];return'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px"><span style="color:'+EXT_COLORS[cat]+';width:14px;text-align:center">'+EXT_ICONS[cat]+'</span><span style="flex:1;color:var(--t1)">'+CAT_LABELS[cat]+'</span><span style="font-weight:700;color:var(--t0)">'+cnt+'개</span></div>';}).join('');
+  var tagsHtml=(d.tags||[]).map(function(t){return'<span style="background:'+c.bg+'30;color:'+c.bg+';border:0.5px solid '+c.bg+'60;font-size:9px;padding:2px 8px;border-radius:10px;font-weight:700">'+escHtml(t)+'</span>';}).join(' ');
+
+  // 건강 정보 섹션
+  var healthStatus=d.healthStatus||'good';
+  var healthHtml='<div class="health-box">'
+    +'<div class="cat-title" style="margin-bottom:10px">드라이브 건강 정보</div>'
+    +'<div class="health-row"><span class="health-lbl">상태</span><span class="'+HEALTH_CLASS[healthStatus]+'">'+HEALTH_LABEL[healthStatus]+'</span></div>'
+    +(d.purchaseDate?'<div class="health-row"><span class="health-lbl">구매일</span><span>'+d.purchaseDate+'</span></div>':'')
+    +(d.warrantyDate?'<div class="health-row"><span class="health-lbl">보증 만료</span><span style="color:'+(new Date(d.warrantyDate)<new Date()?'var(--danger)':'var(--t0)')+'">'+d.warrantyDate+(new Date(d.warrantyDate)<new Date()?' (만료)':'')+'</span></div>':'')
+    +(d.healthNote?'<div class="health-row"><span class="health-lbl">메모</span><span style="color:var(--t1)">'+escHtml(d.healthNote)+'</span></div>':'')
+    +(d.scannedPath?'<div class="health-row"><span class="health-lbl">스캔 경로</span><span style="color:var(--t2);font-size:10px">'+escHtml(d.scannedPath)+'</span></div>':'')
+    +'</div>';
+
+  el.innerHTML=warnHtml
+    +'<div class="dh"><div class="dbignum" style="background:'+c.bg+';color:'+c.text+'">'+d.num+'</div>'
+    +'<div style="flex:1;min-width:0"><div class="dname">'+escHtml(d.name)+'</div>'
+    +'<div class="dmeta">'+escHtml(d.note||'메모 없음')+' · 스캔: '+scanned+(d.lastSeen?' · 마지막 열람: '+new Date(d.lastSeen).toLocaleDateString('ko-KR'):'')+' </div>'
+    +'<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">'+tagsHtml+'</div></div>'
+    +'<div style="display:flex;flex-direction:column;gap:6px">'
+    +'<div style="display:flex;gap:6px"><button class="btn" onclick="openRename(\''+d.id+'\')">✏️ 수정</button><button class="btn dng" onclick="removeDrive(\''+d.id+'\')">✕ 삭제</button></div>'
+    +'<button class="btn pri" onclick="rescanDrive(\''+d.id+'\')">🔄 재스캔</button>'
+    +'</div></div>'
+    +'<div class="stats-grid"><div class="sc"><div class="sc-lbl">총 용량</div><div class="sc-val">'+fGB(d.cap)+'</div></div>'
+    +'<div class="sc"><div class="sc-lbl">사용 중</div><div class="sc-val">'+fGB(d.used)+'</div><div class="bar-bg"><div class="bar-fill" style="width:'+pct+'%;background:'+c.bg+'"></div></div></div>'
+    +'<div class="sc"><div class="sc-lbl">여유 공간</div><div class="sc-val">'+fGB(free)+'</div><div class="bar-bg"><div class="bar-fill" style="width:'+(100-pct)+'%;background:'+c.bg+'55"></div></div></div></div>'
+    +healthHtml
+    +'<div style="margin-bottom:14px"><div class="cat-title">파일 분류</div>'+(catRows||'<div style="font-size:11px;color:var(--t2)">파일 없음</div>')+'</div>'
+    +'<div style="font-size:10px;color:var(--t2)">총 <b style="color:var(--t0)">'+total.toLocaleString()+'</b>개 파일 · 사용률 <b style="color:var(--t0)">'+pct+'%</b></div>';
+}
+
+// ── 재스캔 ────────────────────────────────────────────────────────────────────
+async function rescanDrive(driveId) {
+  var d = catalog.drives.find(function(x){ return x.id===driveId; });
+  if (!d) return;
+  var scanPath = d.scannedPath;
+  if (!scanPath) {
+    alert('저장된 스캔 경로가 없습니다.\n드라이브를 연결하고 "폴더 직접 선택"으로 재추가해주세요.');
+    return;
+  }
+  // 같은 문자(E:\)에 다른 하드가 연결돼 있어도 엉뚱한 드라이브를 기존 레코드에 덮어쓰지 않도록,
+  // 재스캔 전에 연결된 드라이브를 조회해 '같은 물리 볼륨'인지 확인한다.
+  var connected = null;
+  try { var lr = await callNative('listDrives', {}); connected = lr.drives || []; } catch(e) { connected = null; }
+  var connLabel = '';
+  var isVSN = d.volumeId && /^VSN-/.test(d.volumeId);
+  if (isVSN) {
+    // VSN으로 식별되는 드라이브: 같은 볼륨이 실제로 연결돼 있어야만 재스캔. 확인 불가/미연결이면 중단(오스캔 방지).
+    if (connected === null) { alert('드라이브 목록을 확인할 수 없어 안전하게 재스캔할 수 없습니다.\n잠시 후 다시 시도하세요.'); return; }
+    var m = connected.find(function(x){ return x.volumeId && x.volumeId === d.volumeId; });
+    if (!m) {
+      alert('['+d.num+'번] '+d.name+' 드라이브를 찾을 수 없습니다.\n\n원본 드라이브가 연결돼 있지 않거나, 같은 위치에 다른 드라이브가 연결돼 있습니다.\n원본 드라이브를 연결한 뒤 다시 시도하세요.');
+      return;
+    }
+    scanPath = m.path; connLabel = m.label || '';      // 문자가 바뀌었어도 올바른 드라이브로 재스캔
+  } else if (connected) {
+    // volumeId 없는 레거시/폴더 항목: 현재 그 경로에 연결된 드라이브 라벨을 확인창에 보여줘 오스캔을 사용자가 잡게 함.
+    var here = connected.find(function(x){ return x.path === scanPath; });
+    if (here) { connLabel = here.label || ''; if (!d.volumeId) d.volumeId = here.volumeId || null; } // 볼륨ID 백필(다음부터 안전)
+  }
+  if (!confirm('['+d.num+'번] '+d.name+' 재스캔\n\n경로: '+scanPath+(connLabel ? '\n연결된 드라이브: '+connLabel : '')+'\n\n기존 파일 트리가 새 결과로 교체됩니다. 진행할까요?')) return;
+
+  var el = document.getElementById('content');
+  el.innerHTML='<div style="padding:24px"><div style="font-size:12px;color:var(--t1);margin-bottom:8px">재스캔 중...</div>'
+    +'<div id="rscan-msg" style="font-size:11px;color:var(--t2)">시작 중...</div>'
+    +'<div class="prog-track" style="margin-top:8px"><div class="prog-fill" id="rscan-prog" style="width:2%"></div></div>'
+    +'<button onclick="cancelScan()" style="margin-top:10px;padding:3px 10px;font-size:10px;background:transparent;border:1px solid var(--bd);color:var(--t1);border-radius:4px;cursor:pointer;">⏹ 스캔 중단</button></div>';
+
+  _scanProgressCb = function(data) {
+    var m=document.getElementById('rscan-msg'); if(m) m.textContent=data.count.toLocaleString()+'개 스캔 중...';
+    var p=document.getElementById('rscan-prog'); if(p) p.style.width=(10+(data.count%500)/500*75)+'%';
+  };
+  try {
+    var result = await callNative('dbScan', {path: scanPath}, 86400000);
+    _scanProgressCb = null;
+    if (result.error==='cancelled') { showToast('스캔이 중단되었습니다'); renderContent(); return; }
+    if (result.error) { showErrDetail(result.error); renderContent(); return; }
+    // 기존 DB 드라이브 제거 후 새 dbId로 교체
+    if(d.dbId && d.dbId!==result.driveId) await dbCall('dbDeleteDrive',{driveId:d.dbId});
+    var stats=(function(){try{return JSON.parse(result.statsJson||'[]')[0]||{};}catch(e){return {};}})();
+    d.dbId=result.driveId;
+    d.fileCount=stats.files||0;
+    d.used=(result.usedMB>0)?result.usedMB:Math.round((stats.totalKB||0)/1024);
+    if(result.totalMB>0)d.cap=result.totalMB; // Mac 드라이브: 총 용량도 사용량과 같은 출처로 갱신(역전 방지)
+    d.scannedAt=new Date().toISOString();
+    d.cats=await computeCats(d.dbId);
+    treeCache[ckey(d.dbId,'')]=dbRows({rowsJson:result.rootJson});
+    Object.keys(treeState).forEach(function(k){if(k.indexOf(d.dbId+'|')===0)delete treeState[k];});
+    await syncDriveMeta(d);
+    renderAll(); switchTab('info'); markDirty(true);
+    await persistCatalog(); showToast('재스캔 완료');
+  } catch(e) {
+    _scanProgressCb = null;
+    alert('재스캔 오류: '+e.message);
+    renderContent();
+  }
+}
+
+function updateCounts(){document.getElementById('total-drives').textContent=catalog.drives.length;var t=0;catalog.drives.forEach(function(d){t+=(d.fileCount||0);});document.getElementById('total-files').textContent=t.toLocaleString();}
+
+// ── ADD DRIVE ─────────────────────────────────────────────────────────────────
+var _selectedDrivePath=null,_selectedDriveMeta={};
+
+function openAddDrive(){
+  selectedTags=[];selectedColor='lime';_selectedDrivePath=null;_selectedDriveMeta={};
+  document.getElementById('step1').style.display='';document.getElementById('step2').style.display='none';
+  document.getElementById('scan-area').innerHTML='';
+  var scanBtn=document.getElementById('btn-scan');if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}
+  document.getElementById('modal-overlay').style.display='flex';
+  refreshDrivePicker();
+}
+
+function makeDrivePickerItem(d){
+  var pathEsc=escPath(d.path);
+  var typeLabel=d.isMac?' 🍎':d.driveType==='Network'?' 🌐':d.driveType==='Removable'?' 💾':'';
+  var div=document.createElement('div');
+  div.style.cssText='background:var(--bg3);border:0.5px solid var(--bd2);border-radius:6px;padding:10px 12px;cursor:pointer;transition:border .1s';
+  div.onmouseover=function(){this.style.borderColor='var(--acc)';};
+  div.onmouseout=function(){this.style.borderColor='var(--bd2)';};
+  div.onclick=function(){selectConnectedDrive(d.path,d.label,d.totalGB,d.freeGB,d.volumeId);};
+  div.innerHTML='<div style="font-size:12px;font-weight:600;color:var(--t0)">💽 '+escHtml(d.label)+typeLabel+'</div>'
+    +'<div style="font-size:10px;color:var(--t2);margin-top:3px">'+escHtml(d.path)+' · 전체 '+d.totalGB+'GB · 여유 '+d.freeGB+'GB</div>';
+  return div;
+}
+function appendMacDrivesToPicker(macDrives){
+  var picker=document.getElementById('drive-picker');
+  if(!picker||!macDrives.length)return;
+  // "없습니다" 또는 "감지 중" 안내 텍스트만 있으면 지우고 Mac 드라이브 표시
+  var firstChild=picker.firstElementChild;
+  if(firstChild&&firstChild.tagName==='DIV'&&!firstChild.onclick)picker.innerHTML='';
+  macDrives.forEach(function(d){ picker.appendChild(makeDrivePickerItem(d)); });
+}
+async function refreshDrivePicker(){
+  var picker=document.getElementById('drive-picker');
+  picker.innerHTML='<div style="font-size:10px;color:var(--t2)">드라이브 감지 중...</div>';
+  try{
+    var r=await callNative('listDrives',{});var drives=r.drives||[];
+    if(!drives.length){picker.innerHTML='<div style="font-size:10px;color:var(--t2);padding:8px 0">연결된 외장 드라이브가 없습니다.<br>연결 후 새로고침을 눌러주세요.</div>';return;}
+    picker.innerHTML='';
+    drives.forEach(function(d){ picker.appendChild(makeDrivePickerItem(d)); });
+  }catch(e){picker.innerHTML='<div style="font-size:10px;color:var(--danger)">오류: '+escHtml(e.message)+'</div>';}
+}
+
+async function selectCustomFolder(){
+  var r=await callNative('openFolderDialog',{});
+  if(r.cancelled)return;
+  var fp=r.path;
+  selectConnectedDrive(fp, fp, 0, 0, null);
+}
+
+function selectConnectedDrive(drivePath,label,totalGB,freeGB,volumeId){
+  _selectedDrivePath=drivePath;_selectedDriveMeta={totalGB:totalGB,freeGB:freeGB,label:label,volumeId:volumeId||null};
+  document.getElementById('step1').style.display='none';document.getElementById('step2').style.display='';
+  document.getElementById('selected-drive-info').innerHTML='💽 <b>'+escHtml(label)+'</b><br>경로: '+escHtml(drivePath)+(totalGB?' · 전체 '+totalGB+' GB · 여유 '+freeGB+' GB':'');
+  document.getElementById('inp-num').value=catalog.drives.length+1;
+  document.getElementById('inp-name').value=label.replace(/\s*\(.*\)/,'').replace(/^[A-Z]:\s*-\s*/,'').trim();
+  document.getElementById('inp-note').value='';
+  document.getElementById('inp-purchase').value='';document.getElementById('inp-warranty').value='';
+  document.getElementById('inp-health').value='good';document.getElementById('inp-health-note').value='';
+  document.getElementById('scan-area').innerHTML='';
+  document.getElementById('tag-row').innerHTML=TAGS_OPTS.map(function(t){return'<div class="tag-opt" data-tag="'+t+'" onclick="toggleTag(\''+t+'\')">'+t+'</div>';}).join('');
+  document.getElementById('color-row').innerHTML=COLORS.map(function(c){return'<div class="color-dot'+(c.id===selectedColor?' on':'')+'" id="cc-'+c.id+'" style="background:'+c.bg+'" onclick="selectColor(\''+c.id+'\')"></div>';}).join('');
+}
+
+function goStep1(){document.getElementById('step1').style.display='';document.getElementById('step2').style.display='none';refreshDrivePicker();}
+function startDriveScan(){
+  var num=parseInt(document.getElementById('inp-num').value),name=document.getElementById('inp-name').value.trim();
+  var note=document.getElementById('inp-note').value.trim();
+  if(!num||!name){alert('번호와 이름은 필수입니다.');return;}
+  if(!_selectedDrivePath){alert('드라이브를 선택해주세요.');return;}
+  var cap=(_selectedDriveMeta.totalGB||0)*1024,used=((_selectedDriveMeta.totalGB||0)-(_selectedDriveMeta.freeGB||0))*1024;
+  scanFolder(_selectedDrivePath,{
+    num:num,name:name,cap:cap,used:used,note:note,tags:selectedTags.slice(),color:selectedColor,volumeId:_selectedDriveMeta.volumeId||null,
+    purchaseDate:document.getElementById('inp-purchase').value,
+    warrantyDate:document.getElementById('inp-warranty').value,
+    healthStatus:document.getElementById('inp-health').value,
+    healthNote:document.getElementById('inp-health-note').value.trim()
+  });
+}
+function closeModal(){document.getElementById('modal-overlay').style.display='none';}
+function toggleTag(t){var i=selectedTags.indexOf(t);if(i>=0)selectedTags.splice(i,1);else selectedTags.push(t);document.querySelectorAll('.tag-opt').forEach(function(el){el.classList.toggle('on',selectedTags.includes(el.dataset.tag));});}
+function selectColor(id){selectedColor=id;document.querySelectorAll('.color-dot').forEach(function(el){el.classList.toggle('on',el.id==='cc-'+id);});}
+
+// 정보 수정
+var _renameId=null;
+function openRename(id){
+  var d=catalog.drives.find(function(x){return x.id===id;});if(!d)return;
+  _renameId=id;
+  document.getElementById('rename-num').value=d.num;document.getElementById('rename-name').value=d.name;
+  document.getElementById('rename-note').value=d.note||'';
+  document.getElementById('rename-purchase').value=d.purchaseDate||'';
+  document.getElementById('rename-warranty').value=d.warrantyDate||'';
+  document.getElementById('rename-health').value=d.healthStatus||'good';
+  document.getElementById('rename-health-note').value=d.healthNote||'';
+  document.getElementById('rename-overlay').style.display='flex';
+}
+function closeRename(){document.getElementById('rename-overlay').style.display='none';}
+function showErrDetail(msg){document.getElementById('err-detail-text').value=msg;document.getElementById('err-detail-overlay').style.display='flex';}
+function applyRename(){
+  var d=catalog.drives.find(function(x){return x.id===_renameId;});if(!d)return;
+  var newNum=parseInt(document.getElementById('rename-num').value),newName=document.getElementById('rename-name').value.trim();
+  if(!newNum||!newName){alert('번호와 이름은 필수입니다.');return;}
+  if(catalog.drives.find(function(x){return x.id!==_renameId&&x.num===newNum;})){alert(newNum+'번 드라이브가 이미 있습니다.');return;}
+  d.num=newNum;d.name=newName;d.note=document.getElementById('rename-note').value.trim();
+  d.purchaseDate=document.getElementById('rename-purchase').value;
+  d.warrantyDate=document.getElementById('rename-warranty').value;
+  d.healthStatus=document.getElementById('rename-health').value;
+  d.healthNote=document.getElementById('rename-health-note').value.trim();
+  catalog.drives.sort(function(a,b){return a.num-b.num;});
+  closeRename();if(selectedDrive&&selectedDrive.id===_renameId)selectedDrive=d;
+  renderAll();renderContent();
+  syncDriveMeta(d).catch(function(){});
+  persistCatalog(); // 드라이브 메타(이름·번호·건강·메모) 변경을 .hcat에 즉시 저장 — 재실행 시 원복 방지
+}
+
+async function scanFolder(folderPath,meta){
+  var area=document.getElementById('scan-area');
+  area.innerHTML='<div style="margin-top:12px;font-size:10px;color:var(--t2)"><div id="scan-msg">스캔 시작 중...</div><div class="prog-track"><div class="prog-fill" id="prog" style="width:2%"></div></div><div id="scan-sub" style="margin-top:4px;font-size:9px"></div><button id="btn-cancel-scan" onclick="cancelScan()" style="margin-top:8px;padding:3px 10px;font-size:10px;background:transparent;border:1px solid var(--bd);color:var(--t1);border-radius:4px;cursor:pointer;">⏹ 스캔 중단</button></div>';
+  var scanBtn=document.getElementById('btn-scan');if(scanBtn){scanBtn.disabled=true;scanBtn.textContent='스캔 중...';}
+  _scanProgressCb=function(data){var m=document.getElementById('scan-msg');if(m)m.textContent=data.count.toLocaleString()+'개 파일 스캔 중...';var p=document.getElementById('prog');if(p)p.style.width=(10+(data.count%500)/500*75)+'%';};
+  try{
+    var result=await callNative('dbScan',{path:folderPath},86400000);
+    _scanProgressCb=null;
+    if(result.error==='cancelled'){if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}area.innerHTML='';showToast('스캔이 중단되었습니다');return;}
+    if(result.error){showErrDetail(result.error);if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}return;}
+    var pg=document.getElementById('prog');if(pg)pg.style.width='100%';
+    var stats=(function(){try{return JSON.parse(result.statsJson||'[]')[0]||{};}catch(e){return {};}})();
+    var fileCount=stats.files||0, autoUsed=(result.usedMB>0)?result.usedMB:Math.round((stats.totalKB||0)/1024);
+    // 총 용량은 사용량과 같은 출처(헤더 MB)로 맞춰 "사용>총" 역전 방지. Mac=result.totalMB, 그 외=meta.cap(GB절삭) 폴백
+    var autoCap=(result.totalMB>0)?result.totalMB:meta.cap;
+    var m=document.getElementById('scan-msg');if(m)m.textContent='완료 — '+fileCount.toLocaleString()+'개 파일';
+    var dbId=result.driveId;
+    treeCache[ckey(dbId,'')]=dbRows({rowsJson:result.rootJson});
+    var cats=await computeCats(dbId);
+
+    var drive={
+      id:'d'+Date.now(),dbId:dbId,num:meta.num,name:meta.name,cap:autoCap,used:autoUsed,
+      note:meta.note,tags:meta.tags,color:meta.color,
+      purchaseDate:meta.purchaseDate||'',warrantyDate:meta.warrantyDate||'',
+      healthStatus:meta.healthStatus||'good',healthNote:meta.healthNote||'',
+      scannedAt:new Date().toISOString(),scannedPath:folderPath,fileCount:fileCount,cats:cats,volumeId:meta.volumeId||null
+    };
+    // 같은 '물리 볼륨'을 다시 스캔한 경우에만 메타 유지 + DB 교체.
+    // 식별은 볼륨 일련번호(volumeId) 기준 — 드라이브 문자(E:\)는 하드를 바꿔 꽂으면 재사용돼
+    // 서로 다른 하드를 같은 항목으로 덮어쓰는 버그가 있었음. volumeId 없을 때만 경로로 폴백.
+    var vId=meta.volumeId||null;
+    var existByPath=catalog.drives.find(function(d){
+      return vId ? (d.volumeId===vId) : (!d.volumeId && d.scannedPath && d.scannedPath===folderPath);
+    });
+    if(existByPath){
+      if(existByPath.dbId&&existByPath.dbId!==dbId) await dbCall('dbDeleteDrive',{driveId:existByPath.dbId});
+      existByPath.dbId=dbId; existByPath.scannedAt=drive.scannedAt; existByPath.used=autoUsed; existByPath.fileCount=fileCount; existByPath.cats=cats;
+      existByPath.volumeId=vId; existByPath.scannedPath=folderPath;
+      Object.keys(treeState).forEach(function(k){if(k.indexOf(dbId+'|')===0)delete treeState[k];});
+      await syncDriveMeta(existByPath);
+      closeModal(); selectDrive(existByPath.id); updateCounts(); markDirty(true);
+      await persistCatalog(); showToast('저장되었습니다');
+      return;
+    }
+    if(catalog.drives.find(function(d){return d.num===drive.num;})){
+      if(!confirm(drive.num+'번 드라이브가 이미 있습니다. 덮어쓸까요?')){if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}await dbCall('dbDeleteDrive',{driveId:dbId});return;}
+      var rm=catalog.drives.filter(function(d){return d.num===drive.num;});
+      for(var i=0;i<rm.length;i++){if(rm[i].dbId)await dbCall('dbDeleteDrive',{driveId:rm[i].dbId});}
+      catalog.drives=catalog.drives.filter(function(d){return d.num!==drive.num;});
+    }
+    catalog.drives.push(drive);catalog.drives.sort(function(a,b){return a.num-b.num;});
+    await syncDriveMeta(drive);
+    closeModal();selectDrive(drive.id);updateCounts();markDirty(true);
+    await persistCatalog(); showToast('저장되었습니다');
+  }catch(e){_scanProgressCb=null;showErrDetail(e.message);if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}}
+}
+function cancelScan(){callNative('cancelScan',{},5000).catch(function(){});}
+// 카테고리 집계 (DB 확장자별 카운트 → 분류)
+async function computeCats(dbId){
+  var cats={video:0,image:0,audio:0,doc:0,design:0,other:0};
+  try{
+    var rows=dbRows(await dbCall('dbExtCounts',{driveId:dbId}));
+    rows.forEach(function(r){var cat=getCategory('x.'+(r.ext||''));if(cats[cat]===undefined)cats[cat]=0;cats[cat]+=r.cnt;});
+  }catch(e){}
+  return cats;
+}
+// 드라이브 메타를 DB drives 테이블에도 반영 (검색결과 표시용)
+async function syncDriveMeta(d){
+  await dbCall('dbUpdateDrive',{meta:{dbId:d.dbId,num:d.num,name:d.name,cap:d.cap,used:d.used,color:d.color,note:d.note,tags:d.tags||[],purchaseDate:d.purchaseDate,warrantyDate:d.warrantyDate,healthStatus:d.healthStatus,healthNote:d.healthNote,scannedPath:d.scannedPath,scannedAt:d.scannedAt}});
+}
+// 카탈로그(메타만) 저장
+async function persistCatalog(){
+  if(currentFilePath){await saveCurrentFile();return;}
+  var autoPath=DATA_DIR+'\\my_drives.hcat';
+  // 안전망: 기존 my_drives.hcat가 있으면 덮어쓰기 전에 .bak로 보존 (실수로 새 카탈로그가 덮어써도 복구 가능)
+  try{var prev=await callNative('readFile',{path:autoPath});if(prev&&prev.content){await callNative('writeFile',{path:autoPath+'.bak',content:prev.content});}}catch(be){}
+  try{var wr=await callNative('writeFile',{path:autoPath,content:JSON.stringify(catalog,null,2)});if(wr.success){currentFilePath=autoPath;document.getElementById('file-tag').textContent='my_drives.hcat';markDirty(false);}}catch(e){markDirty(true);}
+}
+
+async function removeDrive(id){
+  if(!confirm('이 드라이브 카탈로그를 삭제할까요?'))return;
+  var target=catalog.drives.find(function(d){return d.id===id;});
+  if(target&&target.dbId){try{await dbCall('dbDeleteDrive',{driveId:target.dbId});}catch(e){}}
+  catalog.drives=catalog.drives.filter(function(d){return d.id!==id;});
+  selectedDrive=catalog.drives.length>0?catalog.drives[0]:null;
+  renderAll();renderContent();markDirty(true);
+  await persistCatalog();
+}
+
+// ── 우클릭 컨텍스트 메뉴 ──────────────────────────────────────────────────────
+var _ctxDriveId = null;
+function showDriveContextMenu(e, driveId) {
+  e.preventDefault(); e.stopPropagation();
+  _ctxDriveId = driveId;
+  var menu = document.getElementById('ctx-menu');
+  menu.style.display = 'block';
+  var x = e.clientX, y = e.clientY;
+  if (x + 170 > window.innerWidth)  x = window.innerWidth  - 175;
+  if (y + 160 > window.innerHeight) y = window.innerHeight - 165;
+  menu.style.left = x + 'px'; menu.style.top = y + 'px';
+}
+function hideContextMenu() {
+  document.getElementById('ctx-menu').style.display = 'none';
+  _ctxDriveId = null;
+}
+function ctxAction(action) {
+  var id = _ctxDriveId; hideContextMenu(); if (!id) return;
+  if (action === 'info')   { selectDrive(id); switchTab('info'); }
+  else if (action === 'edit')   { selectDrive(id); openRename(id); }
+  else if (action === 'rescan') { selectDrive(id); switchTab('info'); setTimeout(function(){ rescanDrive(id); }, 0); }
+  else if (action === 'delete') { selectDrive(id); removeDrive(id); }
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#ctx-menu')) hideContextMenu();
+});
+
+// ── KEYBOARD ──────────────────────────────────────────────────────────────────
+document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveCurrentFile();}
+  if(e.key==='Escape'){closeModal();closeRename();}
+});
+
+setTimeout(init,0);
+</script>
+</body>
+</html>
