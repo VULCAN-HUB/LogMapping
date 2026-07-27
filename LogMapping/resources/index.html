@@ -112,10 +112,6 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select
 .file-group-body{padding:5px 11px 8px;display:flex;flex-direction:column;gap:3px}
 .sec-title{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--t2);margin:14px 0 8px;padding-bottom:4px;border-bottom:0.5px solid var(--bd)}
 .sec-title:first-child{margin-top:0}
-.dup-group{background:var(--bg1);border:0.5px solid var(--bd);border-radius:6px;margin-bottom:10px;overflow:hidden}
-.dup-head{padding:8px 12px;font-size:12px;font-weight:600;color:var(--t0);border-bottom:0.5px solid var(--bd);display:flex;align-items:center;gap:8px}
-.dup-file{padding:6px 12px;font-size:11px;color:var(--t1);border-bottom:0.5px solid var(--bd);display:flex;align-items:center;gap:8px}
-.dup-file:last-child{border-bottom:none}
 .health-box{background:var(--bg2);border-radius:6px;padding:12px;border:0.5px solid var(--bd);margin-bottom:14px}
 .health-row{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:12px;border-bottom:0.5px solid var(--bd)}
 .health-row:last-child{border-bottom:none}
@@ -223,6 +219,7 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
     <button class="btn" onclick="saveAsNewFile()">다른 이름 저장</button>
     <button class="btn" onclick="exportCSV()" title="전체 파일 목록을 CSV로 내보내기">↓ CSV</button>
     <button class="btn" onclick="exportMobileViewer()" title="스마트폰에서 검색 가능한 뷰어 HTML 생성">📱 뷰어</button>
+    <button class="btn" onclick="backupDb()" title="카탈로그 DB를 catalog.db.bak으로 백업">🛟 백업</button>
     <button class="btn" onclick="goStartup()">← 홈</button>
     <button class="btn pri" onclick="openAddDrive()">+ 드라이브 추가</button>
   </div>
@@ -262,7 +259,6 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
         <div class="tab active" id="tab-browse" onclick="switchTab('browse')">파일 탐색</div>
         <div class="tab" id="tab-search" onclick="switchTab('search')">검색 결과</div>
         <div class="tab" id="tab-info" onclick="switchTab('info')">드라이브 정보</div>
-        <div class="tab" id="tab-dup" onclick="switchTab('dup')">중복 파일</div>
         <div class="tab" id="tab-dash" onclick="switchTab('dash')">전체 통계</div>
         <div class="tab" id="tab-viewmode" style="margin-left:auto" onclick="showViewModeMenu(this)">👁 보기 변경</div>
       </div>
@@ -281,6 +277,8 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
       <button class="btn" style="margin-top:10px;width:100%;justify-content:center" onclick="refreshDrivePicker()">🔄 새로고침</button>
       <div style="margin-top:8px;text-align:center;font-size:9px;color:var(--t2)">── 또는 NAS · 네트워크 드라이브 ──</div>
       <button class="btn" style="margin-top:6px;width:100%;justify-content:center" onclick="selectCustomFolder()">📁 폴더 직접 선택</button>
+      <div style="margin-top:8px;text-align:center;font-size:9px;color:var(--t2)">── 또는 스캔할 수 없는 하드 ──</div>
+      <button class="btn" style="margin-top:6px;width:100%;justify-content:center" onclick="goStep2NoScan()" title="고장·분실 등으로 스캔이 안 되는 하드를 번호만 등록합니다">🚫 스캔 없이 번호만 등록 (고장·분실)</button>
       <div class="modal-actions">
         <button class="btn" onclick="closeModal()">취소</button>
       </div>
@@ -302,6 +300,7 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
         <option value="good">✅ 정상</option>
         <option value="warn">⚠️ 주의</option>
         <option value="bad">🔴 위험</option>
+        <option value="dead">🚫 고장(스캔 불가)</option>
       </select>
       <label>건강 메모 (SMART 결과 등)</label>
       <input type="text" id="inp-health-note" placeholder="예: 배드섹터 발생 이력 없음"/>
@@ -314,8 +313,19 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
         <button class="btn" onclick="goStep1()">← 뒤로</button>
         <button class="btn" onclick="closeModal()">취소</button>
         <button class="btn pri" id="btn-scan" onclick="startDriveScan()">🔍 스캔 시작</button>
+        <button class="btn" id="btn-noscan" style="display:none" onclick="registerWithoutScan()">🚫 스캔 없이 등록</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- 긴 작업 진행 표시 (뷰어 생성·백업) — 진행 중인지 명확히 보이도록 -->
+<div class="modal-overlay" id="busy-overlay" style="display:none;z-index:300">
+  <div class="modal" style="width:380px;text-align:center">
+    <div id="busy-title" style="font-size:14px;font-weight:700;margin-bottom:8px;letter-spacing:.5px"></div>
+    <div id="busy-msg" style="font-size:11px;color:var(--t2);line-height:1.8"></div>
+    <div class="prog-track" style="margin-top:14px"><div class="prog-fill" id="busy-prog" style="width:4%"></div></div>
+    <div style="margin-top:10px;font-size:9px;color:var(--t2)">완료될 때까지 창을 닫지 마세요.</div>
   </div>
 </div>
 
@@ -351,6 +361,7 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
       <option value="good">✅ 정상</option>
       <option value="warn">⚠️ 주의</option>
       <option value="bad">🔴 위험</option>
+      <option value="dead">🚫 고장(스캔 불가)</option>
     </select>
     <label>건강 메모</label>
     <input type="text" id="rename-health-note" placeholder="예: SMART 확인 완료"/>
@@ -390,7 +401,7 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
       <div class="about-row"><span class="about-lbl">프로젝트</span><span class="about-val"><span>PROJECT 01</span></span></div>
       <div class="about-row"><span class="about-lbl">제작</span><span class="about-val">Unknown</span></div>
       <div class="about-row"><span class="about-lbl">연도</span><span class="about-val">2026</span></div>
-      <div class="about-row"><span class="about-lbl">버전</span><span class="about-val"><span>BETA Ver-0.1</span></span></div>
+      <div class="about-row"><span class="about-lbl">버전</span><span class="about-val"><span>BETA Ver-0.2</span></span></div>
       <div class="about-row"><span class="about-lbl">엔진</span><span class="about-val">WebView2 · WPF · .NET 8</span></div>
       <div class="about-row"><span class="about-lbl">플랫폼</span><span class="about-val">Windows 10/11  64-bit</span></div>
       <div class="about-row"><span class="about-lbl">유튜브</span><span class="about-val"><a class="about-yt" onclick="callNative('openUrl',{path:'https://www.youtube.com/@unknown8563'})">@unknown8563</a></span></div>
@@ -436,6 +447,7 @@ window.chrome.webview.addEventListener('message', function(ev) {
   if (msg.type === 'scanProgress') { if (_scanProgressCb) _scanProgressCb(msg.data); return; }
   if (msg.type === 'macDrivesFound') { appendMacDrivesToPicker(msg.data.drives || []); return; }
   if (msg.type === 'windowClosing') { if (isDirty) { try { persistCatalog(); } catch(e){} } return; }
+  if (msg.type === 'exportProgress') { onExportProgress(msg.data); return; }
   if (msg.data && msg.data.id && _pending.has(msg.data.id)) {
     var resolve = _pending.get(msg.data.id);
     _pending.delete(msg.data.id);
@@ -480,8 +492,8 @@ const EXT_MAP = {
 const EXT_COLORS = {video:'#1D9E75',image:'#378ADD',audio:'#7F77DD',doc:'#BA7517',design:'#D4537E',other:'#888780'};
 const EXT_ICONS  = {video:'▶',image:'◉',audio:'♪',doc:'▣',design:'◈',other:'·'};
 const CAT_LABELS = {video:'영상',image:'사진',audio:'음악',doc:'문서',design:'디자인',other:'기타'};
-const HEALTH_LABEL = {good:'✅ 정상', warn:'⚠️ 주의', bad:'🔴 위험'};
-const HEALTH_CLASS = {good:'health-good', warn:'health-warn', bad:'health-bad'};
+const HEALTH_LABEL = {good:'✅ 정상', warn:'⚠️ 주의', bad:'🔴 위험', dead:'🚫 고장(스캔 불가)'};
+const HEALTH_CLASS = {good:'health-good', warn:'health-warn', bad:'health-bad', dead:'health-bad'};
 const WARN_MONTHS = 6;
 
 var catalog = {drives:[], version:2};
@@ -504,7 +516,7 @@ function countFiles(nodes){if(!nodes)return 0;var c=0,stack=nodes.slice();while(
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function hlText(t,q){var safe=escHtml(t);var ql=q.toLowerCase();var i=t.toLowerCase().indexOf(ql);if(i<0)return safe;return escHtml(t.slice(0,i))+'<mark>'+escHtml(t.slice(i,i+q.length))+'</mark>'+escHtml(t.slice(i+q.length));}
 function collectCats(nodes,acc){if(!nodes)return;nodes.forEach(function(n){if(n.type==='file'){var c=getCategory(n.name);acc[c]=(acc[c]||0)+1;}else collectCats(n.children,acc);});}
-function isOldScan(d){if(!d.scannedAt)return true;return(Date.now()-new Date(d.scannedAt).getTime())/(1000*60*60*24*30)>=WARN_MONTHS;}
+function isOldScan(d){if(d.noScan)return false;if(!d.scannedAt)return true;return(Date.now()-new Date(d.scannedAt).getTime())/(1000*60*60*24*30)>=WARN_MONTHS;}
 function csvEscape(s){return'"'+String(s||'').replace(/"/g,'""')+'"';}
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
@@ -563,12 +575,33 @@ async function loadFile(filePath) {
   catalog=data; currentFilePath=filePath; markDirty(false);
   // DB 고아(카탈로그에 없는) 드라이브 정리 — dbId 있는 경우에만(구버전 보호)
   var validIds=catalog.drives.map(function(d){return d.dbId;}).filter(function(x){return x;});
-  if(validIds.length)dbCall('dbPrune',{query:validIds.join(',')}).catch(function(){});
+  var pruneDone=validIds.length?dbCall('dbPrune',{query:validIds.join(',')}).catch(function(){}):Promise.resolve();
+  // 정리가 끝난 뒤에 고장 하드를 DB에 채워 넣는다(정리보다 먼저 넣으면 방금 만든 행이 지워질 수 있음)
+  pruneDone.then(backfillNoScanDrives).catch(function(){});
   document.getElementById('file-tag').textContent=pathBasename(filePath);
   selectedDrive=catalog.drives.length>0?catalog.drives[0]:null;
   showApp(); renderAll();
   if(selectedDrive)selectDrive(selectedDrive.id);else renderContent();
 }
+// 고장(스캔 없이 등록) 하드를 DB에도 등록해 둔다.
+// 이 기능 초기 버전은 .hcat에만 기록해서, 내보낸 뷰어에 고장 하드가 빠져 있었다.
+// 카탈로그를 열 때 빠진 것만 자동으로 채워 넣어 다시 등록할 필요가 없게 한다.
+async function backfillNoScanDrives(){
+  var targets=catalog.drives.filter(function(d){return d.noScan&&!d.dbId;});
+  if(!targets.length)return;
+  var changed=false;
+  for(var i=0;i<targets.length;i++){
+    var d=targets[i];
+    try{
+      var rr=await dbCall('dbUpdateDrive',{meta:{num:d.num,name:d.name,cap:0,used:0,color:d.color,note:d.note,
+        tags:d.tags||[],purchaseDate:d.purchaseDate,warrantyDate:d.warrantyDate,
+        healthStatus:d.healthStatus||'dead',healthNote:d.healthNote,scannedPath:'',scannedAt:''}});
+      if(rr&&rr.driveId){d.dbId=rr.driveId;changed=true;}
+    }catch(e){}
+  }
+  if(changed){markDirty(true);try{await persistCatalog();}catch(e){}}
+}
+
 async function openHcatFile(){var r=await callNative('openFileDialog',{});if(!r.cancelled&&r.path)loadFile(r.path);}
 async function showToast(msg){var t=document.getElementById("app-toast");if(t)t.remove();t=document.createElement("div");t.id="app-toast";t.textContent=msg;t.style.cssText="position:fixed;left:50%;bottom:60px;transform:translateX(-50%);background:rgba(30,30,34,0.95);color:#fff;padding:10px 22px;border-radius:8px;font-size:13px;z-index:99999;box-shadow:0 4px 20px #0008;border:1px solid var(--bd);opacity:0;transition:opacity 0.2s;";document.body.appendChild(t);requestAnimationFrame(function(){t.style.opacity="1";});setTimeout(function(){t.style.opacity="0";setTimeout(function(){if(t.parentNode)t.remove();},250);},1400);}
 function showToast2(){}
@@ -604,11 +637,44 @@ async function exportCSV() {
   if (r.cancelled) return;
   var fp = r.path; if (!fp.endsWith('.csv')) fp += '.csv';
   try {
-    var wr = await callNative('dbExportCsv', {path: fp}, 600000);
+    showBusy('CSV 내보내기 중','파일 수가 많으면 몇 분 걸립니다.',50);
+    var wr = await callNative('dbExportCsv', {path: fp}, 3600000);
+    hideBusy();
     if (wr.success) alert('CSV 내보내기 완료!\n'+fp);
     else throw new Error(wr.error||'실패');
-  } catch(e) { alert('내보내기 실패: '+e.message); }
+  } catch(e) { hideBusy(); alert('내보내기 실패: '+e.message); }
 }
+// ── 긴 작업 진행 오버레이 ────────────────────────────────────────────────────
+function showBusy(title,msg,pct){
+  document.getElementById('busy-title').textContent=title;
+  document.getElementById('busy-msg').innerHTML=msg||'';
+  document.getElementById('busy-prog').style.width=(pct||4)+'%';
+  document.getElementById('busy-overlay').style.display='flex';
+}
+function setBusy(msg,pct){
+  var m=document.getElementById('busy-msg'); if(m&&msg!==undefined&&msg!==null)m.innerHTML=msg;
+  var p=document.getElementById('busy-prog'); if(p&&pct!==undefined)p.style.width=pct+'%';
+}
+function hideBusy(){document.getElementById('busy-overlay').style.display='none';}
+function onExportProgress(d){
+  var total=d.total||1,done=d.done||0;
+  setBusy('드라이브 '+done+' / '+total+' 처리 완료<br><span style="font-size:10px">파일 목록을 압축해 하나의 HTML로 담는 중입니다.</span>',
+          Math.max(4,Math.round(done/total*100)));
+}
+
+// ── 백업 (수동) ──────────────────────────────────────────────────────────────
+// 대용량 카탈로그는 종료 시 자동 백업을 하지 않는다(창이 안 닫힘). 원할 때 이 버튼으로 수행.
+async function backupDb(){
+  if(!confirm('카탈로그 DB를 catalog.db.bak 으로 백업할까요?\n\n용량이 크면 몇 분 걸릴 수 있습니다.'))return;
+  showBusy('백업 중','catalog.db → catalog.db.bak<br><span style="font-size:10px">용량에 따라 몇 분 걸릴 수 있습니다.</span>',50);
+  try{
+    var r=await callNative('dbBackup',{},3600000);
+    hideBusy();
+    if(r&&r.success)showToast('백업 완료 (catalog.db.bak)');
+    else throw new Error((r&&r.error)||'실패');
+  }catch(e){hideBusy();alert('백업 실패: '+e.message);}
+}
+
 // ── EXPORT: 모바일 뷰어 ──────────────────────────────────────────────────────
 async function exportMobileViewer() {
   if (!catalog.drives.length) { alert('카탈로그가 비어 있습니다.'); return; }
@@ -616,15 +682,14 @@ async function exportMobileViewer() {
   if (r.cancelled) return;
   var fp = r.path; if (!fp.endsWith('.html')) fp += '.html';
   try {
-    var wr = await callNative('dbExportViewer', {path: fp}, 600000);
+    showBusy('뷰어 생성 중','시작 중...<br><span style="font-size:10px">모든 하드를 하나의 HTML로 담습니다.</span>',4);
+    var wr = await callNative('dbExportViewer', {path: fp}, 3600000);
+    hideBusy();
     if (wr.success) {
-      if (wr.count > 1) {
-        alert('파일이 많아 모바일에서 안전하게 열 수 있도록\n드라이브별 '+wr.count+'개 HTML로 나눠 저장했습니다.\n\n각 파일을 스마트폰으로 복사해 열면\n해당 드라이브를 탐색·검색할 수 있습니다.');
-      } else {
-        alert('모바일 뷰어 저장 완료!\n'+fp+'\n\n이 파일을 스마트폰으로 복사하거나\n공유 폴더에 놓으면 검색할 수 있습니다.');
-      }
+      // 드라이브가 몇 개든 항상 파일 1개. 내부는 드라이브별 gzip 압축이라 폰에서도 열린다.
+      alert('모바일 뷰어 저장 완료!\n'+fp+'\n\n모든 드라이브가 이 파일 하나에 들어 있습니다.\n스마트폰으로 복사해 열면 하드를 골라 탐색·검색할 수 있습니다.\n\n※ 크롬·엣지·삼성인터넷 최신 버전 또는 사파리 16.4 이상에서 열어주세요.');
     } else throw new Error(wr.error||'실패');
-  } catch(e) { alert('저장 실패: '+e.message); }
+  } catch(e) { hideBusy(); alert('저장 실패: '+e.message); }
 }
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
 function goStartup(){
@@ -670,7 +735,7 @@ function selectDrive(id){
 }
 function switchTab(tab){
   currentTab=tab;
-  ['browse','search','info','dup','dash'].forEach(function(t){document.getElementById('tab-'+t).className='tab'+(t===tab?' active':'');});
+  ['browse','search','info','dash'].forEach(function(t){document.getElementById('tab-'+t).className='tab'+(t===tab?' active':'');});
   renderContent();
 }
 function setFilter(cat){if(filterCat===cat&&cat!=='all'){cat='all';}filterCat=cat;filterTagColor='';document.querySelectorAll('.chip').forEach(function(c){c.classList.toggle('on',c.dataset.cat===cat);});if(typeof updateTagFilterDot==='function')updateTagFilterDot();renderContent();}
@@ -680,7 +745,6 @@ function updateTagFilterDot(){var chip=document.getElementById("chip-tag");if(!c
 function renderContent(){
   var el=document.getElementById('content');
   if(currentTab==='dash'){renderDash(el);return;}
-  if(currentTab==='dup'){renderDuplicates(el);return;}
   if(!selectedDrive){el.innerHTML='<div class="empty-state"><div class="empty-icon">💽</div><p>왼쪽에서 드라이브를 선택하거나<br>새 드라이브를 추가하세요.</p></div>';return;}
   if(currentTab==='browse')renderBrowse(el);
   else if(currentTab==='search')renderSearch(el);
@@ -702,41 +766,6 @@ function renderDash(el){
   el.innerHTML=warnHtml+'<div class="dash-grid"><div class="dash-card"><div class="dash-val">'+catalog.drives.length+'</div><div class="dash-lbl">드라이브</div></div><div class="dash-card"><div class="dash-val">'+fGB(totalCap)+'</div><div class="dash-lbl">총 용량</div></div><div class="dash-card"><div class="dash-val">'+fGB(totalUsed)+'</div><div class="dash-lbl">사용 중 · '+totalPct+'%</div></div><div class="dash-card"><div class="dash-val">'+totalFiles.toLocaleString()+'</div><div class="dash-lbl">전체 파일</div></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div><div class="cat-title">파일 종류별 합산</div>'+catRows+'</div><div><div class="cat-title">드라이브별 용량</div>'+driveRows+'</div></div>';
 }
 
-// ── 중복 파일 감지 ────────────────────────────────────────────────────────────
-function renderDuplicates(el) {
-  if (!catalog.drives.length) { el.innerHTML='<div class="no-res">드라이브가 없습니다.</div>'; return; }
-  el.innerHTML='<div class="no-res">중복 파일 분석 중...</div>';
-  // 통계는 전수 쿼리(정확), 표시 목록은 표본(프리징 방지)으로 분리
-  Promise.all([dbCall('dbDuplicates',{limit:8000}),dbCall('dbDuplicateStats',{})]).then(function(rr){
-    var rows=dbRows(rr[0]);
-    var st=dbRows(rr[1])[0]||{groups:0,wastedKB:0};
-    if(!st.groups){el.innerHTML='<div class="empty-state"><div class="empty-icon">✅</div><p>중복 파일이 없습니다.<br>모든 파일이 고유합니다.</p></div>';return;}
-    // name|size 로 그룹핑 (표시용 표본)
-    var groups={},order=[];
-    rows.forEach(function(f){var k=f.name.toLowerCase()+'|'+f.size;if(!groups[k]){groups[k]=[];order.push(k);}groups[k].push(f);});
-    var dups=order.map(function(k){return groups[k];}).filter(function(g){return g.length>=2;});
-    var shownNote=(st.groups>dups.length)?(' · 상위 '+dups.length+'개 그룹 표시'):'';
-    var html='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
-      +'<div><div style="font-size:16px;font-weight:700;color:var(--t0)">'+st.groups.toLocaleString()+'개 중복 그룹</div>'
-      +'<div style="font-size:10px;color:var(--t2);margin-top:2px">절약 가능 용량: '+fSZ(st.wastedKB)+shownNote+'</div></div></div>';
-    html+=dups.slice(0,300).map(function(g){
-      var cat=getCategory(g[0].name),color=EXT_COLORS[cat];
-      var items=g.map(function(f){
-        var drive=driveByDbId(f.drive_id);var dc=getDriveColor({color:drive?drive.color:''});
-        var pathEsc=escPath(f.full_path);
-        return '<div class="dup-file">'
-          +'<span style="color:'+dc.bg+';font-size:9px;font-weight:700;border:0.5px solid '+dc.bg+';border-radius:3px;padding:1px 5px;flex-shrink:0">['+f.driveNum+'번]</span>'
-          +'<span style="flex:1;color:var(--t2);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(f.full_path)+'</span>'
-          +'<button class="copy-btn" onclick="copyClip(\''+pathEsc+'\', this)">경로 복사</button></div>';
-      }).join('');
-      return '<div class="dup-group"><div class="dup-head"><span style="color:'+color+';font-size:13px">'+EXT_ICONS[cat]+'</span>'
-        +'<span style="flex:1">'+escHtml(g[0].name)+'</span>'
-        +'<span style="font-size:10px;color:var(--t2)">'+fSZ(g[0].size)+' · '+g.length+'곳</span></div>'+items+'</div>';
-    }).join('');
-    if(dups.length>300)html+='<div class="no-res">... 외 '+(dups.length-300)+'개 그룹</div>';
-    el.innerHTML=html;
-  });
-}
 function collectFlat(nodes, drive, prefix, out) {
   if (!nodes) return;
   var stack=[{nodes:nodes,prefix:prefix}];
@@ -867,7 +896,19 @@ function renderVisibleRows(){
   for(var i=startIdx;i<endIdx;i++){var row=buildRow(vFlatRows[i]);row.style.top=(i*rh)+'px';_vtreeContainer.appendChild(row);}
 }
 function renderBrowse(el){
-  if(!selectedDrive||!selectedDrive.dbId){el.innerHTML='<div class="no-res">스캔된 파일이 없습니다.</div>';return;}
+  if(!selectedDrive){el.innerHTML='<div class="no-res">왼쪽에서 드라이브를 선택하세요.</div>';return;}
+  // 스캔 없이 등록된 하드(고장·분실): 왜 목록이 없는지 명확히 알려준다
+  if(selectedDrive.noScan){
+    el.innerHTML='<div class="warn-box" style="align-items:flex-start"><div>'
+      +'<b>🚫 '+escHtml(selectedDrive.name)+'</b> — 스캔되지 않은 드라이브입니다.<br>'
+      +'상태: <b>'+(HEALTH_LABEL[selectedDrive.healthStatus]||HEALTH_LABEL.dead)+'</b>'
+      +(selectedDrive.healthNote?' · '+escHtml(selectedDrive.healthNote):'')+'<br>'
+      +'<span style="color:var(--t2);font-size:10px">고장·분실 등으로 읽을 수 없어 번호와 이름만 기록해 둔 항목입니다(스캔 누락이 아닙니다).<br>'
+      +'드라이브를 다시 쓸 수 있게 되면 [+ 드라이브 추가]에서 같은 번호로 스캔하면 교체됩니다.</span>'
+      +'</div></div>';
+    return;
+  }
+  if(!selectedDrive.dbId){el.innerHTML='<div class="no-res">스캔된 파일이 없습니다.</div>';return;}
   if(filterCat!=='all'){renderFilteredFlat(el);return;}
   var warnHtml=isOldScan(selectedDrive)?'<div class="warn-box">⚠️ 이 드라이브는 '+WARN_MONTHS+'개월 이상 스캔되지 않았습니다.</div>':'';
   el.innerHTML='<div style="display:flex;flex-direction:column;height:100%">'+warnHtml+'<div id="vscroll-wrap" style="position:relative;flex:1;min-height:0;overflow-y:auto"><div id="vtree-inner" style="position:relative;width:100%;padding-right:44px;box-sizing:border-box"></div></div></div>';
@@ -875,8 +916,15 @@ function renderBrowse(el){
   _vtreeContainer=inner;_vscrollEl=document.getElementById('vscroll-wrap');
   _vscrollEl.onscroll=function(){if(_vrafId)cancelAnimationFrame(_vrafId);_vrafId=requestAnimationFrame(renderVisibleRows);};
   _vscrollEl.addEventListener('contextmenu',function(e){var row=e.target.closest('[data-key]');if(!row){e.preventDefault();showSpaceCtxMenu(e);}});
-  // 루트 자식이 캐시에 없으면 로드 후 렌더
-  if(treeCache[ckey(selectedDrive.dbId,'')]===undefined) loadChildren(selectedDrive.dbId,'').then(rebuildVTree);
+  // 루트 자식이 캐시에 없으면 로드 후 렌더.
+  // 대용량 카탈로그에서는 첫 조회에 시간이 걸리므로 "불러오는 중"을 반드시 표시한다
+  // (예전에는 빈 화면이라 사용자가 멈춘 줄 알고 클릭하다 오류를 만났다).
+  if(treeCache[ckey(selectedDrive.dbId,'')]===undefined){
+    inner.innerHTML='<div style="padding:18px 12px;font-size:11px;color:var(--t2)">파일 목록 불러오는 중...</div>';
+    loadChildren(selectedDrive.dbId,'').then(rebuildVTree).catch(function(e){
+      inner.innerHTML='<div style="padding:18px 12px;font-size:11px;color:var(--danger)">불러오기 실패: '+escHtml(e.message)+'</div>';
+    });
+  }
   else rebuildVTree();
 }
 // 분류/태그 필터: DB에서 평면 목록 조회 후 공통 렌더
@@ -928,12 +976,21 @@ function buildFlatRow(f,q){
   div.style.cssText='box-sizing:border-box;height:'+FL_ROWH+'px;padding:5px 14px 5px 10px;border-bottom:0.5px solid var(--bd);cursor:pointer;overflow:hidden';
   var nameHtml=q?hlText(f.name,q):escHtml(f.name);
   var mt=f.mtime?'<span style="flex-shrink:0;font-size:10px;color:var(--t2);margin-left:6px">'+f.mtime+'</span>':'';
+  // 전체 드라이브 검색 결과에는 어느 하드인지 배지로 표시 (검색은 모든 하드를 대상으로 한다)
+  var dbadge='',dpath='';
+  if(f.driveNum!==undefined&&f.driveNum!==null){
+    var dr=driveByDbId(f.drive_id);
+    var dc=getDriveColor({color:dr?dr.color:''});
+    dbadge='<span style="flex-shrink:0;background:'+dc.bg+';color:'+dc.text+';font-size:9px;font-weight:700;padding:1px 7px;border-radius:8px">'+f.driveNum+'번</span>';
+    dpath='<b style="color:'+dc.bg+'">['+f.driveNum+'번'+(f.driveName?' '+escHtml(f.driveName):'')+']</b> ';
+  }
   div.innerHTML='<div style="display:flex;align-items:center;gap:8px;line-height:1.3">'
     +'<span style="color:'+(isDir?'var(--t1)':color)+';flex-shrink:0;width:15px;text-align:center;font-size:12px">'+(isDir?'📁':EXT_ICONS[cat])+'</span>'
+    +dbadge
     +'<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--t0)">'+nameHtml+'</span>'
     +'<span style="flex-shrink:0;font-size:10px;color:var(--t2)">'+fSZ(f.size)+'</span>'+mt
     +'<button class="copy-btn" style="flex-shrink:0" onclick="event.stopPropagation();copyClip(\''+fpEsc+'\',this)">경로 복사</button></div>'
-    +'<div style="margin-top:1px;padding-left:23px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(f.full_path)+'</div>';
+    +'<div style="margin-top:1px;padding-left:23px;font-size:9px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+dpath+escHtml(f.full_path)+'</div>';
   // 좌클릭: 폴더면 내부 탐색, 파일이면 경로 복사
   if(isDir){
     div.onclick=(function(d,p){return function(){openFlatFolder(d,p);};})(did,f.full_path);
@@ -1050,6 +1107,7 @@ function renderInfo(el){
   var catCounts=d.cats||{};
   var old=isOldScan(d);
   var warnHtml=old?'<div class="warn-box">⚠️ 마지막 스캔: '+scanned+' — '+WARN_MONTHS+'개월 이상 지났습니다. 재스캔을 권장합니다.</div>':'';
+  if(d.noScan)warnHtml='<div class="warn-box">🚫 <div>스캔되지 않은 드라이브 — 상태 <b>'+(HEALTH_LABEL[d.healthStatus]||HEALTH_LABEL.dead)+'</b><br><span style="font-size:10px;color:var(--t2)">고장·분실 등으로 읽을 수 없어 번호만 등록된 항목입니다. 파일 목록·용량 정보가 없습니다.</span></div></div>';
   var catRows=Object.entries(catCounts).filter(function(e){return e[1]>0;}).map(function(e){var cat=e[0],cnt=e[1];return'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px"><span style="color:'+EXT_COLORS[cat]+';width:14px;text-align:center">'+EXT_ICONS[cat]+'</span><span style="flex:1;color:var(--t1)">'+CAT_LABELS[cat]+'</span><span style="font-weight:700;color:var(--t0)">'+cnt+'개</span></div>';}).join('');
   var tagsHtml=(d.tags||[]).map(function(t){return'<span style="background:'+c.bg+'30;color:'+c.bg+';border:0.5px solid '+c.bg+'60;font-size:9px;padding:2px 8px;border-radius:10px;font-weight:700">'+escHtml(t)+'</span>';}).join(' ');
 
@@ -1087,7 +1145,8 @@ async function rescanDrive(driveId) {
   if (!d) return;
   var scanPath = d.scannedPath;
   if (!scanPath) {
-    alert('저장된 스캔 경로가 없습니다.\n드라이브를 연결하고 "폴더 직접 선택"으로 재추가해주세요.');
+    if (d.noScan) alert('['+d.num+'번] '+d.name+' 은(는) 스캔 없이 등록된 항목입니다.\n\n드라이브를 사용할 수 있게 되면 [+ 드라이브 추가]에서 같은 번호('+d.num+'번)로 스캔하면 이 항목이 교체됩니다.');
+    else alert('저장된 스캔 경로가 없습니다.\n드라이브를 연결하고 "폴더 직접 선택"으로 재추가해주세요.');
     return;
   }
   // 같은 문자(E:\)에 다른 하드가 연결돼 있어도 엉뚱한 드라이브를 기존 레코드에 덮어쓰지 않도록,
@@ -1157,7 +1216,8 @@ function openAddDrive(){
   selectedTags=[];selectedColor='lime';_selectedDrivePath=null;_selectedDriveMeta={};
   document.getElementById('step1').style.display='';document.getElementById('step2').style.display='none';
   document.getElementById('scan-area').innerHTML='';
-  var scanBtn=document.getElementById('btn-scan');if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}
+  var scanBtn=document.getElementById('btn-scan');if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';scanBtn.style.display='';}
+  var nsBtn=document.getElementById('btn-noscan');if(nsBtn)nsBtn.style.display='none';
   document.getElementById('modal-overlay').style.display='flex';
   refreshDrivePicker();
 }
@@ -1203,6 +1263,8 @@ async function selectCustomFolder(){
 function selectConnectedDrive(drivePath,label,totalGB,freeGB,volumeId){
   _selectedDrivePath=drivePath;_selectedDriveMeta={totalGB:totalGB,freeGB:freeGB,label:label,volumeId:volumeId||null};
   document.getElementById('step1').style.display='none';document.getElementById('step2').style.display='';
+  document.getElementById('btn-scan').style.display='';document.getElementById('btn-noscan').style.display='none';
+  document.getElementById('inp-health').value='good';
   document.getElementById('selected-drive-info').innerHTML='💽 <b>'+escHtml(label)+'</b><br>경로: '+escHtml(drivePath)+(totalGB?' · 전체 '+totalGB+' GB · 여유 '+freeGB+' GB':'');
   document.getElementById('inp-num').value=catalog.drives.length+1;
   document.getElementById('inp-name').value=label.replace(/\s*\(.*\)/,'').replace(/^[A-Z]:\s*-\s*/,'').trim();
@@ -1215,6 +1277,51 @@ function selectConnectedDrive(drivePath,label,totalGB,freeGB,volumeId){
 }
 
 function goStep1(){document.getElementById('step1').style.display='';document.getElementById('step2').style.display='none';refreshDrivePicker();}
+
+// 스캔할 수 없는 하드(고장·분실)를 번호만 등록하는 경로.
+// 번호 사이가 비어 있으면 다른 사람이 "스캔을 깜박한 것"으로 오해하므로, 고장임을 명시해 남긴다.
+function goStep2NoScan(){
+  _selectedDrivePath=null;_selectedDriveMeta={totalGB:0,freeGB:0,label:'스캔 없이 등록',volumeId:null};
+  document.getElementById('step1').style.display='none';document.getElementById('step2').style.display='';
+  document.getElementById('selected-drive-info').innerHTML='🚫 <b>스캔 없이 번호만 등록</b><br>'
+    +'<span style="color:var(--t2)">고장·분실 등으로 스캔할 수 없는 하드입니다. 파일 목록 없이 번호·이름만 기록되고, 상태는 <b>🚫 고장(스캔 불가)</b>로 저장됩니다.</span>';
+  document.getElementById('inp-num').value=catalog.drives.length+1;
+  document.getElementById('inp-health').value='dead';
+  document.getElementById('btn-scan').style.display='none';
+  document.getElementById('btn-noscan').style.display='';
+  document.getElementById('scan-area').innerHTML='';
+}
+
+async function registerWithoutScan(){
+  var num=parseInt(document.getElementById('inp-num').value),name=document.getElementById('inp-name').value.trim();
+  if(!num||!name){alert('번호와 이름은 필수입니다.');return;}
+  var dup=catalog.drives.find(function(d){return d.num===num;});
+  if(dup){
+    if(!confirm(num+'번 드라이브가 이미 있습니다.\n\n"'+dup.name+'" 을(를) 이 항목으로 교체할까요?\n(스캔된 파일 목록이 있으면 삭제됩니다)'))return;
+    if(dup.dbId)try{await dbCall('dbDeleteDrive',{driveId:dup.dbId});}catch(e){}
+    catalog.drives=catalog.drives.filter(function(d){return d.num!==num;});
+  }
+  var st=document.getElementById('inp-health').value||'dead';
+  if(st==='good')st='dead';   // 스캔 없이 등록 = 사용 불가 상태이므로 '정상'으로 남기지 않는다
+  var drive={
+    id:'d'+Date.now(),dbId:null,num:num,name:name,cap:0,used:0,
+    note:document.getElementById('inp-note').value.trim(),tags:selectedTags.slice(),color:selectedColor,
+    purchaseDate:document.getElementById('inp-purchase').value,warrantyDate:document.getElementById('inp-warranty').value,
+    healthStatus:st,healthNote:document.getElementById('inp-health-note').value.trim(),
+    scannedAt:null,scannedPath:null,volumeId:null,fileCount:0,cats:{},noScan:true
+  };
+  catalog.drives.push(drive);catalog.drives.sort(function(a,b){return a.num-b.num;});
+  // 고장 하드도 DB에 등록한다(파일 0개). 그래야 내보낸 뷰어에도 "이 번호는 고장"이 표시되어
+  // 받아 보는 사람이 스캔 누락으로 오해하지 않는다.
+  try{
+    var rr=await dbCall('dbUpdateDrive',{meta:{num:drive.num,name:drive.name,cap:0,used:0,color:drive.color,
+      note:drive.note,tags:drive.tags||[],purchaseDate:drive.purchaseDate,warrantyDate:drive.warrantyDate,
+      healthStatus:drive.healthStatus,healthNote:drive.healthNote,scannedPath:'',scannedAt:''}});
+    if(rr&&rr.driveId)drive.dbId=rr.driveId;
+  }catch(e){}
+  closeModal();selectDrive(drive.id);updateCounts();markDirty(true);
+  await persistCatalog();showToast(num+'번 등록 완료 (스캔 없음)');
+}
 function startDriveScan(){
   var num=parseInt(document.getElementById('inp-num').value),name=document.getElementById('inp-name').value.trim();
   var note=document.getElementById('inp-note').value.trim();

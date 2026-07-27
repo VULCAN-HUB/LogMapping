@@ -132,8 +132,6 @@ namespace LogMapping
                     case "dbByExts": HandleDbByExts(msg); break;
                     case "dbFolders": HandleDbFolders(msg); break;
                     case "dbExportCsv": HandleDbExportCsv(msg); break;
-                    case "dbDuplicates": HandleDbDuplicates(msg); break;
-                    case "dbDuplicateStats": HandleDbDuplicateStats(msg); break;
                     case "dbExportViewer": HandleDbExportViewer(msg); break;
                     case "dbBackup": HandleDbBackup(msg); break;
                 }
@@ -794,11 +792,14 @@ namespace LogMapping
         private CatalogDb? _db;
         private readonly object _dbLock = new();
         private CancellationTokenSource? _scanCts;
+        // DB 핸들러들이 여러 백그라운드 스레드에서 동시에 호출하므로, 생성·반환을 모두 락 안에서 처리한다.
         private CatalogDb Db()
         {
-            if (_db == null)
-                lock (_dbLock) { _db ??= new CatalogDb(Path.Combine(DataDir, "catalog.db")); }
-            return _db;
+            lock (_dbLock)
+            {
+                _db ??= new CatalogDb(Path.Combine(DataDir, "catalog.db"));
+                return _db;
+            }
         }
 
         private void HandleDbScan(WebMessage msg)
@@ -841,6 +842,10 @@ namespace LogMapping
                     var statsJson = db.DriveStatsJson(driveId);
                     var rootJson = db.GetChildrenJson(driveId, "");
                     SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB });
+
+                    // 결과를 먼저 보낸 뒤, 뷰어 내보내기용 캐시를 미리 만들어 둔다.
+                    // (스캔 때 한 번 압축해 두면 나중에 뷰어를 뽑을 때 다시 계산하지 않는다)
+                    try { db.BuildViewerCache(driveId); } catch { }
                 }
                 catch (OperationCanceledException)
                 {
@@ -860,25 +865,37 @@ namespace LogMapping
 
         private void HandleDbUpdateDrive(WebMessage msg)
         {
-            try
+            Task.Run(() =>
             {
-                if (!msg.Meta.HasValue) { SendToJS("dbUpdateDriveResult", new { id = msg.Id, success = false, error = "meta 없음" }); return; }
-                long driveId = Db().UpsertDrive(msg.Meta.Value);
-                SendToJS("dbUpdateDriveResult", new { id = msg.Id, driveId, success = true });
-            }
-            catch (Exception ex) { SendToJS("dbUpdateDriveResult", new { id = msg.Id, success = false, error = ex.Message }); }
+                try
+                {
+                    if (!msg.Meta.HasValue) { SendToJS("dbUpdateDriveResult", new { id = msg.Id, success = false, error = "meta 없음" }); return; }
+                    long driveId = Db().UpsertDrive(msg.Meta.Value);
+                    SendToJS("dbUpdateDriveResult", new { id = msg.Id, driveId, success = true });
+                }
+                catch (Exception ex) { SendToJS("dbUpdateDriveResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            });
         }
 
         private void HandleDbDeleteDrive(WebMessage msg)
         {
-            try { Db().DeleteDrive(msg.DriveId); SendToJS("dbDeleteDriveResult", new { id = msg.Id, success = true }); }
-            catch (Exception ex) { SendToJS("dbDeleteDriveResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { Db().DeleteDrive(msg.DriveId); SendToJS("dbDeleteDriveResult", new { id = msg.Id, success = true }); }
+                catch (Exception ex) { SendToJS("dbDeleteDriveResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            });
         }
 
+        // ⚠️ DB 핸들러는 반드시 백그라운드에서 실행한다. UI 스레드에서 돌리면 대용량 카탈로그
+        // (2.5GB·350만 행)에서 조회 한 번이 앱 전체를 멈추게 하고, 그 동안의 클릭이 "응답 없음"으로
+        // 이어졌다. CatalogDb는 _gate 락으로 직렬화되므로 백그라운드 실행이 안전하다.
         private void HandleDbChildren(WebMessage msg)
         {
-            try { var rowsJson = Db().GetChildrenJson(msg.DriveId, msg.ParentPath ?? ""); SendToJS("dbChildrenResult", new { id = msg.Id, rowsJson }); }
-            catch (Exception ex) { SendToJS("dbChildrenResult", new { id = msg.Id, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { var rowsJson = Db().GetChildrenJson(msg.DriveId, msg.ParentPath ?? ""); SendToJS("dbChildrenResult", new { id = msg.Id, rowsJson }); }
+                catch (Exception ex) { SendToJS("dbChildrenResult", new { id = msg.Id, error = ex.Message }); }
+            });
         }
 
         private void HandleDbSearch(WebMessage msg)
@@ -892,32 +909,47 @@ namespace LogMapping
 
         private void HandleDbListDrives(WebMessage msg)
         {
-            try { var rowsJson = Db().ListDrivesJson(); SendToJS("dbListDrivesResult", new { id = msg.Id, rowsJson }); }
-            catch (Exception ex) { SendToJS("dbListDrivesResult", new { id = msg.Id, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { var rowsJson = Db().ListDrivesJson(); SendToJS("dbListDrivesResult", new { id = msg.Id, rowsJson }); }
+                catch (Exception ex) { SendToJS("dbListDrivesResult", new { id = msg.Id, error = ex.Message }); }
+            });
         }
 
         private void HandleDbSetColor(WebMessage msg)
         {
-            try { Db().SetItemColor(msg.DriveId, msg.Path ?? "", string.IsNullOrEmpty(msg.Color) ? null : msg.Color); SendToJS("dbSetColorResult", new { id = msg.Id, success = true }); }
-            catch (Exception ex) { SendToJS("dbSetColorResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { Db().SetItemColor(msg.DriveId, msg.Path ?? "", string.IsNullOrEmpty(msg.Color) ? null : msg.Color); SendToJS("dbSetColorResult", new { id = msg.Id, success = true }); }
+                catch (Exception ex) { SendToJS("dbSetColorResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            });
         }
 
         private void HandleDbStats(WebMessage msg)
         {
-            try { var rowsJson = Db().DriveStatsJson(msg.DriveId); SendToJS("dbStatsResult", new { id = msg.Id, rowsJson }); }
-            catch (Exception ex) { SendToJS("dbStatsResult", new { id = msg.Id, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { var rowsJson = Db().DriveStatsJson(msg.DriveId); SendToJS("dbStatsResult", new { id = msg.Id, rowsJson }); }
+                catch (Exception ex) { SendToJS("dbStatsResult", new { id = msg.Id, error = ex.Message }); }
+            });
         }
 
         private void HandleDbExtCounts(WebMessage msg)
         {
-            try { var rowsJson = Db().ExtCountsJson(msg.DriveId); SendToJS("dbExtCountsResult", new { id = msg.Id, rowsJson }); }
-            catch (Exception ex) { SendToJS("dbExtCountsResult", new { id = msg.Id, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { var rowsJson = Db().ExtCountsJson(msg.DriveId); SendToJS("dbExtCountsResult", new { id = msg.Id, rowsJson }); }
+                catch (Exception ex) { SendToJS("dbExtCountsResult", new { id = msg.Id, error = ex.Message }); }
+            });
         }
 
         private void HandleDbFilesByColor(WebMessage msg)
         {
-            try { var rowsJson = Db().FilesByColorJson(msg.DriveId, msg.Color ?? "", msg.Limit > 0 ? msg.Limit : 1000); SendToJS("dbFilesByColorResult", new { id = msg.Id, rowsJson }); }
-            catch (Exception ex) { SendToJS("dbFilesByColorResult", new { id = msg.Id, error = ex.Message }); }
+            Task.Run(() =>
+            {
+                try { var rowsJson = Db().FilesByColorJson(msg.DriveId, msg.Color ?? "", msg.Limit > 0 ? msg.Limit : 1000); SendToJS("dbFilesByColorResult", new { id = msg.Id, rowsJson }); }
+                catch (Exception ex) { SendToJS("dbFilesByColorResult", new { id = msg.Id, error = ex.Message }); }
+            });
         }
 
         private void HandleDbBackup(WebMessage msg)
@@ -935,28 +967,11 @@ namespace LogMapping
             {
                 try
                 {
-                    var files = Db().ExportViewer(msg.Path ?? "");
+                    var files = Db().ExportViewer(msg.Path ?? "", (done, total) =>
+                        SendToJS("exportProgress", new { id = msg.Id, done, total }));
                     SendToJS("dbExportViewerResult", new { id = msg.Id, success = true, count = files.Count, files = files.ToArray() });
                 }
                 catch (Exception ex) { SendToJS("dbExportViewerResult", new { id = msg.Id, success = false, error = ex.Message }); }
-            });
-        }
-
-        private void HandleDbDuplicates(WebMessage msg)
-        {
-            Task.Run(() =>
-            {
-                try { var rowsJson = Db().DuplicatesJson(msg.Limit > 0 ? msg.Limit : 5000); SendToJS("dbDuplicatesResult", new { id = msg.Id, rowsJson }); }
-                catch (Exception ex) { SendToJS("dbDuplicatesResult", new { id = msg.Id, error = ex.Message }); }
-            });
-        }
-
-        private void HandleDbDuplicateStats(WebMessage msg)
-        {
-            Task.Run(() =>
-            {
-                try { var rowsJson = Db().DuplicateStatsJson(); SendToJS("dbDuplicateStatsResult", new { id = msg.Id, rowsJson }); }
-                catch (Exception ex) { SendToJS("dbDuplicateStatsResult", new { id = msg.Id, error = ex.Message }); }
             });
         }
 
@@ -989,15 +1004,18 @@ namespace LogMapping
 
         private void HandleDbPrune(WebMessage msg)
         {
-            try
+            Task.Run(() =>
             {
-                var ids = new List<long>();
-                foreach (var part in (msg.Query ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
-                    if (long.TryParse(part.Trim(), out var v)) ids.Add(v);
-                Db().PruneDrives(ids);
-                SendToJS("dbPruneResult", new { id = msg.Id, success = true });
-            }
-            catch (Exception ex) { SendToJS("dbPruneResult", new { id = msg.Id, success = false, error = ex.Message }); }
+                try
+                {
+                    var ids = new List<long>();
+                    foreach (var part in (msg.Query ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+                        if (long.TryParse(part.Trim(), out var v)) ids.Add(v);
+                    Db().PruneDrives(ids);
+                    SendToJS("dbPruneResult", new { id = msg.Id, success = true });
+                }
+                catch (Exception ex) { SendToJS("dbPruneResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            });
         }
 
         private void SendToJS(string type, object data)
