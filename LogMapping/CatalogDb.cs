@@ -741,7 +741,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
             sw.Write(ViewerHead);
 
             // 드라이브 메타 (i=payload 인덱스, n=번호, name)
-            sw.Write("var DRIVES=[");
+            sw.Write("<script>\nvar DRIVES=[");
             for (int i = 0; i < drives.Count; i++)
             {
                 if (i > 0) sw.Write(',');
@@ -749,7 +749,12 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                          + ",name:" + JsonSerializer.Serialize(drives[i].name)
                          + (drives[i].dead ? ",dead:1" : "") + "}");
             }
-            sw.Write("];\nvar PAY=[];\n");
+            sw.Write("];\n</scr" + "ipt>\n");
+
+            // ⚠️ 동작 로직을 **payload보다 먼저** 넣는다. 예전에는 스크립트가 파일 맨 뒤에 있어
+            // 32MB를 전부 파싱하기 전까지 화면에 아무것도 못 그렸다(폰에서 1분 넘게 빈 화면).
+            // 앞에 두면 하드 버튼이 즉시 뜨고, 목록은 해당 payload가 도착하는 대로 표시된다.
+            sw.Write(ViewerTail);
 
             onProgress?.Invoke(0, drives.Count);
 
@@ -767,11 +772,14 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                         WriteCache(drives[i].id, gzBytes);
                     }
                 }
-                sw.Write("PAY[" + i + "]='" + Convert.ToBase64String(gzBytes) + "';\n");
+                // ⚠️ base64를 JS 문자열 리터럴로 넣지 않는다. 350만 항목이면 스크립트 본문이 30MB를
+                // 넘고, 스마트폰 인앱 브라우저가 그 큰 스크립트를 파싱하다 실패/지연했다(실제 발생).
+                // type='text/plain' 블록에 넣으면 HTML 텍스트로 취급돼 JS 파서를 거치지 않는다.
+                sw.Write("<script type='text/plain' id='p" + i + "'>" + Convert.ToBase64String(gzBytes) + "</scr" + "ipt>\n");
                 onProgress?.Invoke(i + 1, drives.Count);
             }
 
-            sw.Write(ViewerTail);
+            sw.Write("</body></html>");
             return new List<string> { path };
         }
 
@@ -800,12 +808,24 @@ mark{background:#D3540055;color:#FF7A2F;border-radius:2px}
 .err{background:#2a1010;border:1px solid #5a2020;color:#ff8a80;padding:12px;border-radius:8px;font-size:13px;line-height:1.6}</style></head>
 <body><h1>LOG<span>MAPPING</span></h1>
 <input type='search' id='q' placeholder='전체 파일 검색...' autocomplete='off'>
-<div id='drivebar'></div><div id='info'></div><div id='tree'></div>
-<script>
+<div id='drivebar'></div><div id='info'></div>
+<div id='tree'><div class='err' id='nojs'>
+<b style='font-size:15px'>⚠️ 목록을 표시할 수 없습니다</b><br><br>
+카카오톡·구글드라이브 등 <b>앱 안에서 바로 열면</b> 자바스크립트가 차단되어 목록이 나오지 않습니다.<br><br>
+<b>· PC(윈도우·맥) 브라우저에서 열어주세요</b> — 가장 확실합니다<br>
+<b>· 휴대폰에서 보려면</b> 자바스크립트를 지원하는 브라우저 앱을 설치해 그 앱으로 열어야 합니다<br><br>
+<span style='font-size:11px;color:#c99'>이 문구가 보이면 파일이 잘못된 것이 아니라, 여는 앱이 스크립트를 막고 있는 것입니다.</span>
+</div></div>
+<noscript><div class='err'>이 브라우저에서 자바스크립트가 꺼져 있어 목록을 표시할 수 없습니다. PC 브라우저에서 열어주세요.</div></noscript>
 ";
 
         // 뷰어 HTML 뒷부분 (동작). 압축 해제는 선택한 드라이브에 대해서만 수행한다.
         private const string ViewerTail = @"
+<script>
+// 스크립트가 실행됐다는 뜻이므로, '표시할 수 없습니다' 경고를 즉시 '읽는 중'으로 바꾼다.
+// (경고는 스크립트를 막는 앱에서만 그대로 남는다)
+(function(){var n=document.getElementById('nojs');
+ if(n){n.className='no-res';n.id='boot';n.innerHTML='목록을 읽는 중입니다...<br><span style=""font-size:11px"">파일이 커서 잠시 걸릴 수 있습니다.</span>';}})();
 function byId(x){return document.getElementById(x);}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function hl(t,q){var i=t.toLowerCase().indexOf(q.toLowerCase());if(i<0)return esc(t);
@@ -815,9 +835,16 @@ function setInfo(t){byId('info').textContent=t;}
 var cur=0, curText=null, curTree=null, openState={}, _rows=[], busy=false;
 var noZip = (typeof DecompressionStream==='undefined');
 
-// base64(gzip) → 텍스트
+// base64(gzip) → 텍스트. payload는 <script type='text/plain' id='pN'> 블록에서 읽는다.
 async function inflate(i){
-  var b=atob(PAY[i]), n=b.length, u=new Uint8Array(n);
+  var el=document.getElementById('p'+i);
+  // 아직 문서가 다 읽히지 않아 payload가 없을 수 있다 → 다 읽힐 때까지 기다린 뒤 다시 찾는다
+  if(!el && document.readyState==='loading'){
+    await new Promise(function(r){ document.addEventListener('DOMContentLoaded', r, {once:true}); });
+    el=document.getElementById('p'+i);
+  }
+  if(!el) throw new Error('아직 목록을 읽는 중입니다. 잠시 후 다시 눌러주세요.');
+  var b=atob(el.textContent.trim()), n=b.length, u=new Uint8Array(n);
   for(var k=0;k<n;k++)u[k]=b.charCodeAt(k);
   var st=new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'));
   return await new Response(st).text();
@@ -994,11 +1021,20 @@ byId('q').addEventListener('input',function(e){
   _t=setTimeout(function(){ onSearch(v); },350);
 });
 
+var boot=byId('boot'); if(boot) boot.remove();   // 정적 '준비 중' 안내 제거 (여기까지 왔으면 JS 동작)
+// 이 스크립트는 payload보다 **앞**에 있으므로 하드 버튼은 즉시 그린다.
+// 목록(payload)은 문서가 더 읽혀야 도착하므로, 다 읽힌 뒤(DOMContentLoaded)에 첫 하드를 연다.
 renderBar();
 if(noZip){
   byId('tree').innerHTML=""<div class='err'>이 브라우저는 압축 해제를 지원하지 않습니다.<br>크롬·엣지·삼성인터넷 최신 버전 또는 사파리 16.4 이상에서 열어주세요.</div>"";
-} else if(DRIVES.length){ selDrive(0); } else { setInfo('드라이브가 없습니다'); }
-</script></body></html>";
+} else if(!DRIVES.length){ setInfo('드라이브가 없습니다'); }
+else {
+  setInfo('목록을 읽는 중... (' + DRIVES.length + '개 하드)');
+  var openFirst=function(){ var b=byId('boot'); if(b)b.remove(); selDrive(0); };
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', openFirst);
+  else openFirst();
+}
+</script>";
 
         private static string ReadRows(SqliteCommand cmd)
         {
