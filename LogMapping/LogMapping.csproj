@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
@@ -6,7 +6,7 @@
     <AssemblyName>LogMapping</AssemblyName>
     <RootNamespace>LogMapping</RootNamespace>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <Version>0.2.3-beta</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -24,6 +24,5 @@
   <ItemGroup>
     <Resource Include="icon.ico" />
     <EmbeddedResource Include="resources\index.html" />
-    <EmbeddedResource Include="resources\scanner.js" />
   </ItemGroup>
 </Project>
