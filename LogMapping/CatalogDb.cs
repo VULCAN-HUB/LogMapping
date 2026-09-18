@@ -1,4 +1,4 @@
-// CatalogDb.cs — SQLite 기반 드라이브 카탈로그 저장소
+﻿// CatalogDb.cs — SQLite 기반 드라이브 카탈로그 저장소
 // 대용량(수백만 파일) 대응: 파일 트리를 메모리에 올리지 않고 DB에서 지연 조회
 //
 // 동시성: SqliteConnection(_conn)은 동시 명령에 안전하지 않다. 백그라운드 스캔/검색/내보내기와
@@ -29,12 +29,17 @@ namespace LogMapping
             Path = dbPath;
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dbPath)!);
             OpenWithRecovery();
-            // 성능 PRAGMA + busy_timeout(연결 간 잠금 경합 시 즉시 실패 대신 대기)
-            Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA busy_timeout=5000;");
-            EnsureSchema();
+            try
+            {
+                // 초기화가 실패해도 연결 핸들을 남기지 않는다.
+                Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA busy_timeout=5000;");
+                _conn.CreateFunction<string,string>("file_ext", name => System.IO.Path.GetExtension(name??"").TrimStart('.').ToLowerInvariant(), isDeterministic:true);
+                EnsureSchema();
+            }
+            catch { _conn.Dispose(); throw; }
         }
 
-        // DB를 열고 열림 가능 여부를 확인. 손상(malformed) 시 손상 파일을 정리하고 새 DB를 생성한다.
+        // DB를 열고 열림 가능 여부를 확인. 실패하면 원본을 보존하고 오류를 보고한다.
         //
         // ⚠️ 여기서 `PRAGMA quick_check`(전수 검사)를 하지 않는다. quick_check는 DB 전체를 읽어
         // 2.5GB/파일 350만 건 카탈로그에서 375초(6분)가 걸렸고, 앱 시작 때마다 UI를 정지시켰다.
@@ -42,30 +47,20 @@ namespace LogMapping
         // 실제 손상은 이후 쿼리에서 SqliteException으로 표면화된다(각 핸들러가 오류를 JS로 보고).
         private void OpenWithRecovery()
         {
-            _conn = new SqliteConnection($"Data Source={Path}");
-            _conn.Open();
-            bool ok;
+            _conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path, Pooling = false }.ToString());
             try
             {
+                _conn.Open();
                 using var c = _conn.CreateCommand();
-                c.CommandText = "PRAGMA schema_version; SELECT count(*) FROM sqlite_master;";
+                c.CommandText = "PRAGMA schema_version;";
                 c.ExecuteScalar();
-                ok = true;
             }
-            catch { ok = false; } // malformed / not a database 등 → 예외
-
-            if (ok) return;
-
-            // 손상: 연결을 닫고 db/-wal/-shm을 제거한 뒤 새로 생성
-            try { _conn.Dispose(); } catch { }
-            SqliteConnection.ClearAllPools();
-            foreach (var ext in new[] { "", "-wal", "-shm" })
+            catch (Exception ex)
             {
-                try { if (File.Exists(Path + ext)) File.Delete(Path + ext); } catch { }
+                _conn.Dispose();
+                throw new IOException("카탈로그 DB를 열 수 없습니다. 원본 DB와 백업을 삭제하지 않았습니다. " +
+                    "data 폴더를 보존한 뒤 백업 복원을 확인해 주세요.\n" + ex.Message, ex);
             }
-            _conn = new SqliteConnection($"Data Source={Path}");
-            _conn.Open();
-            WasRecovered = true;
         }
 
         private void Exec(string sql)
@@ -114,30 +109,74 @@ namespace LogMapping
         // 이 판단이 DB를 열 때마다(=앱 시작마다) 실행되어 카탈로그가 뜨기까지 2~3분이 걸렸다.
         // → 행 존재 여부는 EXISTS(0.00초)로 확인하고, 한 번 확인했으면 meta 플래그로 기록해
         //   다음 시작부터는 검사 자체를 건너뛴다.
+        public string? IndexWarning { get; private set; }
         private void EnsureFts()
         {
+            // 이름 + 경로 색인으로 1회 이행. 실패해도 원본 files는 보존하고 LIKE로 검색한다.
             try
             {
-                Exec("CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(name, content='files', content_rowid='id', tokenize='trigram');");
-                Exec("CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN INSERT INTO files_fts(rowid,name) VALUES(new.id,new.name); END;");
-                Exec("CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN INSERT INTO files_fts(files_fts,rowid,name) VALUES('delete',old.id,old.name); END;");
-
-                if (GetMeta("fts_ready") != "1")
+                if (GetMeta("fts_schema") != "2")
                 {
-                    // 기존 DB(트리거 도입 이전 데이터)가 색인 안 돼 있으면 1회만 재구축
-                    // files_fts_data는 색인이 비어도 설정 행이 있어 판정에 쓸 수 없다.
-                    // 문서당 1행인 files_fts_docsize로 "색인된 문서가 있는지"를 본다(0.1초).
-                    bool anyFiles = Scalar("SELECT EXISTS(SELECT 1 FROM files)") == 1;
-                    bool anyIndex;
-                    try { anyIndex = Scalar("SELECT EXISTS(SELECT 1 FROM files_fts_docsize)") == 1; }
-                    catch { anyIndex = Scalar("SELECT EXISTS(SELECT 1 FROM files_fts)") == 1; }
-                    if (anyFiles && !anyIndex)
-                        Exec("INSERT INTO files_fts(files_fts) VALUES('rebuild');");
-                    SetMeta("fts_ready", "1");
+                    using var tx = _conn.BeginTransaction();
+                    using var c = _conn.CreateCommand(); c.Transaction = tx;
+                    c.CommandText = @"
+DROP TRIGGER IF EXISTS files_fts_ai; DROP TRIGGER IF EXISTS files_fts_ad;
+DROP TABLE IF EXISTS files_fts;
+CREATE VIRTUAL TABLE files_fts USING fts5(name,full_path,content='files',content_rowid='id',tokenize='trigram');
+CREATE TRIGGER files_fts_ai AFTER INSERT ON files BEGIN INSERT INTO files_fts(rowid,name,full_path) VALUES(new.id,new.name,new.full_path); END;
+CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN INSERT INTO files_fts(files_fts,rowid,name,full_path) VALUES('delete',old.id,old.name,old.full_path); END;
+INSERT INTO files_fts(files_fts) VALUES('rebuild');
+INSERT INTO meta(k,v) VALUES('fts_schema','2') ON CONFLICT(k) DO UPDATE SET v='2';";
+                    c.ExecuteNonQuery(); tx.Commit();
                 }
                 _ftsEnabled = true;
             }
-            catch { _ftsEnabled = false; }
+            catch (Exception ex) { _ftsEnabled = false; IndexWarning = "검색 색인을 준비하지 못해 일반 검색을 사용합니다: " + ex.Message; }
+        }
+
+        public string DescribeJson()
+        {
+            lock (_gate)
+            {
+                var identity = GetMeta("database_id");
+                if (string.IsNullOrEmpty(identity))
+                {
+                    identity = Guid.NewGuid().ToString("N"); SetMeta("database_id", identity);
+                    if (GetMeta("database_id") != identity) throw new IOException("DB 식별자를 저장하지 못했습니다.");
+                }
+                using var c = _conn.CreateCommand();
+                c.CommandText = "SELECT id,scanned_path,scanned_at,name FROM drives";
+                var rows = JsonSerializer.Deserialize<JsonElement>(ReadRows(c));
+                return JsonSerializer.Serialize(new { databaseId=identity, drives=rows,
+                    autoBackupSkipped=FileSizeBytes>AutoBackupMaxBytes,
+                    lastBackup=GetMeta("last_backup"), warning=IndexWarning });
+            }
+        }
+
+        private static string Scope(IEnumerable<long>? ids, string column)
+        {
+            if (ids == null) throw new ArgumentException("카탈로그 범위가 필요합니다.");
+            var csv = string.Join(",", ids.Where(x=>x>0).Distinct());
+            return column + " IN (" + (csv.Length==0 ? "0" : csv) + ")";
+        }
+        private static string Order(string? sort, string prefix="") => sort switch
+        {
+            "size-desc" => prefix+"is_dir DESC,"+prefix+"size DESC,"+prefix+"name COLLATE NOCASE",
+            "size-asc" => prefix+"is_dir DESC,"+prefix+"size ASC,"+prefix+"name COLLATE NOCASE",
+            "name-desc" => prefix+"is_dir DESC,"+prefix+"name COLLATE NOCASE DESC",
+            _ => prefix+"is_dir DESC,"+prefix+"name COLLATE NOCASE"
+        };
+        public void CopyColors(long oldId, long newId)
+        {
+            if(oldId<=0 || oldId==newId) return;
+            lock(_gate)
+            {
+                using var c=_conn.CreateCommand();
+                c.CommandText=@"UPDATE files AS n SET color=(SELECT o.color FROM files o WHERE o.drive_id=$old AND o.full_path=n.full_path AND o.is_dir=n.is_dir LIMIT 1)
+                    WHERE n.drive_id=$new AND EXISTS(SELECT 1 FROM files o WHERE o.drive_id=$old AND o.full_path=n.full_path AND o.is_dir=n.is_dir AND o.color IS NOT NULL)";
+                c.Parameters.AddWithValue("$old",oldId);c.Parameters.AddWithValue("$new",newId);c.ExecuteNonQuery();
+                _dirtySinceBackup=true;
+            }
         }
 
         private void EnsureSchema()
@@ -187,6 +226,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
 ");
             // 기존 DB 호환: mtime 컬럼이 없으면 추가
             try { Exec("ALTER TABLE files ADD COLUMN mtime TEXT"); } catch { }
+            if(GetMeta("viewer_payload")!="2") { Exec("DELETE FROM viewer_cache;"); SetMeta("viewer_payload","2"); }
             EnsureFts();
         }
 
@@ -237,7 +277,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                 cmd.Parameters.AddWithValue("$ls", S("lastSeen"));
 
                 _dirtySinceBackup = true;
-                if (id.HasValue) { cmd.ExecuteNonQuery(); return id.Value; }
+                if (id.HasValue) { if(cmd.ExecuteNonQuery()!=1) throw new IOException("DB에 드라이브가 없습니다. data 폴더와 카탈로그가 같은 세트인지 확인하세요."); return id.Value; }
                 return (long)(cmd.ExecuteScalar() ?? 0L);
             }
         }
@@ -289,25 +329,8 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
         // (drive_id가 idx_files_drive_parent의 선두 컬럼이라 인덱스를 탄다).
         public void PruneDrives(IEnumerable<long> validIds)
         {
-            var list = new List<long>(validIds);
-            var csv = list.Count > 0 ? string.Join(",", list) : "0";
-            lock (_gate)
-            {
-                var orphans = new List<long>();
-                using (var q = _conn.CreateCommand())
-                {
-                    q.CommandText = "SELECT id FROM drives WHERE id NOT IN (" + csv + ")";
-                    using var r = q.ExecuteReader();
-                    while (r.Read()) orphans.Add(r.GetInt64(0));
-                }
-                if (orphans.Count == 0) return;   // 정리할 것이 없으면 전체 스캔 없이 즉시 종료
-
-                var ocsv = string.Join(",", orphans);
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = "DELETE FROM files WHERE drive_id IN (" + ocsv + "); DELETE FROM drives WHERE id IN (" + ocsv + "); DELETE FROM viewer_cache WHERE drive_id IN (" + ocsv + ");";
-                cmd.ExecuteNonQuery();
-                _dirtySinceBackup = true;
-            }
+            // .hcat snapshots share this DB. Absence from one snapshot does not establish orphanhood.
+            // Retain prior generations until a separate, reference-aware cleanup is explicitly requested.
         }
 
         public void ClearFiles(long driveId)
@@ -340,7 +363,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                 {
                     if (r.IsDBNull(0)) continue;
                     gw.Write(Convert.ToInt64(r.GetValue(1) ?? 0L) == 1 ? 'D' : 'F');
-                    gw.Write(r.GetString(0));
+                    gw.Write(JsonSerializer.Serialize(r.GetString(0)));
                     gw.Write('\n');
                 }
             }
@@ -433,71 +456,13 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
             return count;
         }
 
-        // ── 스캔 트리(중첩 객체)를 평탄화해 일괄 삽입 ──────────────────────────────
-        public int InsertTree(long driveId, List<object> tree)
-        {
-            ClearFiles(driveId);
-            lock (_gate)
-            {
-                using var tx = _conn.BeginTransaction();
-                using var cmd = _conn.CreateCommand();
-                cmd.Transaction = tx;
-                cmd.CommandText = @"INSERT INTO files(drive_id,name,is_dir,size,parent_path,full_path,mtime)
-                                    VALUES($d,$n,$dir,$sz,$pp,$fp,$mt)";
-                var pD = cmd.Parameters.Add("$d", SqliteType.Integer);
-                var pN = cmd.Parameters.Add("$n", SqliteType.Text);
-                var pDir = cmd.Parameters.Add("$dir", SqliteType.Integer);
-                var pSz = cmd.Parameters.Add("$sz", SqliteType.Integer);
-                var pPP = cmd.Parameters.Add("$pp", SqliteType.Text);
-                var pFP = cmd.Parameters.Add("$fp", SqliteType.Text);
-                var pMT = cmd.Parameters.Add("$mt", SqliteType.Text);
-                pD.Value = driveId;
-
-                int count = 0;
-                // 익명 객체(new { type, name, size/children })를 reflection으로 읽음
-                object? Prop(object n, string name) => n.GetType().GetProperty(name)?.GetValue(n);
-
-                void Walk(List<object> nodes, string parentPath)
-                {
-                    foreach (var n in nodes)
-                    {
-                        if (n == null) continue;
-                        string type = Prop(n, "type")?.ToString() ?? "";
-                        // 한글 정규화(NFC) — macOS APFS는 NFD(자모 분리)로 저장하므로 검색 일관성 위해 변환
-                        string name = (Prop(n, "name")?.ToString() ?? "").Normalize(System.Text.NormalizationForm.FormC);
-                        bool isDir = type == "dir";
-                        long size = 0;
-                        if (!isDir)
-                        {
-                            var sz = Prop(n, "size");
-                            if (sz != null) long.TryParse(sz.ToString(), out size);
-                        }
-                        string full = parentPath.Length == 0 ? name : parentPath + "/" + name;
-
-                        string mtime = isDir ? "" : (Prop(n, "mtime")?.ToString() ?? "");
-                        pN.Value = name; pDir.Value = isDir ? 1 : 0; pSz.Value = size;
-                        pPP.Value = parentPath; pFP.Value = full; pMT.Value = mtime;
-                        cmd.ExecuteNonQuery();
-                        count++;
-
-                        if (isDir && Prop(n, "children") is List<object> kids)
-                            Walk(kids, full);
-                    }
-                }
-                Walk(tree, "");
-                tx.Commit();
-                _dirtySinceBackup = true;
-                return count;
-            }
-        }
-
         // 특정 폴더의 직속 자식 (지연 로딩) — 폴더 먼저, 이름순
         public string GetChildrenJson(long driveId, string parentPath)
         {
             lock (_gate)
             {
                 using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"SELECT name,is_dir,size,full_path,color,mtime,
+                cmd.CommandText = @"SELECT drive_id,name,is_dir,size,full_path,color,mtime,
                     (SELECT COUNT(*) FROM files c WHERE c.drive_id=f.drive_id AND c.parent_path=f.full_path) AS childCount
                     FROM files f WHERE drive_id=$d AND parent_path=$p
                     ORDER BY is_dir DESC, name COLLATE NOCASE";
@@ -510,34 +475,34 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
         // 전체 드라이브 통합 검색
         // 3글자 이상 + FTS 사용 가능 → trigram 인덱스로 후보를 좁히고 SQL에서 관련도 정렬.
         // 그 외(2글자 이하 / FTS 미지원) → 기존 LIKE 폴백.
-        public string SearchJson(string query, int limit)
+        public string SearchJson(string query, int limit, IEnumerable<long> ids, string? color=null,
+            string? extCsv=null, bool foldersOnly=false, string? sort=null)
         {
-            query = (query ?? "").Trim();
-            lock (_gate)
+            query=(query??"").Trim().Replace('\\','/').Normalize(NormalizationForm.FormC);
+            lock(_gate)
             {
-                using var cmd = _conn.CreateCommand();
-                if (_ftsEnabled && query.Length >= 3)
+                using var cmd=_conn.CreateCommand();
+                var where = new List<string> { Scope(ids,"f.drive_id") };
+                bool fts=_ftsEnabled && query.EnumerateRunes().Count()>=3;
+                if(fts) { where.Add("files_fts MATCH $match");cmd.Parameters.AddWithValue("$match", "\""+query.Replace("\"","\"\"")+"\""); }
+                where.Add("f.full_path LIKE $q ESCAPE '\\'");
+                if(!string.IsNullOrEmpty(color)){where.Add("f.color=$color");cmd.Parameters.AddWithValue("$color",color);}
+                if(foldersOnly)where.Add("f.is_dir=1");
+                if(!string.IsNullOrEmpty(extCsv))
                 {
-                    var ql = query.ToLowerInvariant();
-                    cmd.CommandText = @"SELECT f.name,f.is_dir,f.size,f.full_path,f.color,f.drive_id,d.num as driveNum,d.name as driveName
-                        FROM files_fts ft JOIN files f ON f.id=ft.rowid JOIN drives d ON d.id=f.drive_id
-                        WHERE files_fts MATCH @m AND instr(lower(f.name), @ql) > 0
-                        ORDER BY (CASE WHEN lower(f.name)=@ql THEN 0
-                                       WHEN instr(lower(f.name), @ql)=1 THEN 1
-                                       ELSE 2 END), length(f.name), f.name COLLATE NOCASE
-                        LIMIT @lim";
-                    cmd.Parameters.AddWithValue("@m", "\"" + query.Replace("\"", "\"\"") + "\"");
-                    cmd.Parameters.AddWithValue("@ql", ql);
-                    cmd.Parameters.AddWithValue("@lim", limit);
+                    bool exclude=extCsv.StartsWith('!');
+                    var exts=extCsv.TrimStart('!').Split(',').Where(x=>System.Text.RegularExpressions.Regex.IsMatch(x,"^[a-z0-9]+$")).Select(x=>"'"+x+"'");
+                    var extList=string.Join(",",exts);if(extList.Length==0)extList="''";
+                    where.Add("(f.is_dir=1 OR lower(file_ext(f.name)) "+(exclude?"NOT IN":"IN")+" ("+extList+"))");
                 }
-                else
-                {
-                    cmd.CommandText = @"SELECT f.name,f.is_dir,f.size,f.full_path,f.color,f.drive_id,d.num as driveNum,d.name as driveName
-                        FROM files f JOIN drives d ON d.id=f.drive_id
-                        WHERE f.name LIKE $q ESCAPE '\' ORDER BY f.name COLLATE NOCASE LIMIT $lim";
-                    cmd.Parameters.AddWithValue("$q", "%" + Escape(query) + "%");
-                    cmd.Parameters.AddWithValue("$lim", limit);
-                }
+                string order=sort=="relevance" || string.IsNullOrEmpty(sort)
+                    ? "CASE WHEN lower(f.name)=$name THEN 0 WHEN instr(lower(f.name),$name)=1 THEN 1 WHEN instr(lower(f.name),$name)>0 THEN 2 ELSE 3 END,length(f.name),f.name COLLATE NOCASE"
+                    : Order(sort,"f.");
+                cmd.CommandText="SELECT f.name,f.is_dir,f.size,f.full_path,f.color,f.mtime,f.drive_id,d.num AS driveNum,d.name AS driveName FROM "+
+                    (fts?"files_fts JOIN files f ON f.id=files_fts.rowid":"files f")+" JOIN drives d ON d.id=f.drive_id WHERE "+string.Join(" AND ",where)+" ORDER BY "+order+" LIMIT $lim";
+                cmd.Parameters.AddWithValue("$q","%"+Escape(query)+"%");
+                if(sort=="relevance" || string.IsNullOrEmpty(sort))cmd.Parameters.AddWithValue("$name",query.ToLowerInvariant());
+                cmd.Parameters.AddWithValue("$lim",Math.Clamp(limit,1,200001));
                 return ReadRows(cmd);
             }
         }
@@ -553,19 +518,19 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                 cmd.Parameters.AddWithValue("$c", (object?)color ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$d", driveId);
                 cmd.Parameters.AddWithValue("$p", fullPath);
-                cmd.ExecuteNonQuery();
+                if (cmd.ExecuteNonQuery() == 0) throw new InvalidOperationException("태그를 적용할 항목을 찾지 못했습니다. 목록을 다시 열어 주세요.");
                 _dirtySinceBackup = true;
             }
         }
 
         // 색상 태그로 필터 (전체 경로 반환)
-        public string FilesByColorJson(long driveId, string color, int limit)
+        public string FilesByColorJson(long driveId, string color, int limit, string? sort=null)
         {
             lock (_gate)
             {
                 using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"SELECT name,is_dir,size,full_path,color,mtime FROM files
-                    WHERE drive_id=$d AND color=$c ORDER BY full_path LIMIT $lim";
+                cmd.CommandText = @"SELECT drive_id,name,is_dir,size,full_path,color,mtime FROM files
+                    WHERE drive_id=$d AND color=$c ORDER BY " + Order(sort) + " LIMIT $lim";
                 cmd.Parameters.AddWithValue("$d", driveId);
                 cmd.Parameters.AddWithValue("$c", color);
                 cmd.Parameters.AddWithValue("$lim", limit);
@@ -574,14 +539,14 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
         }
 
         // 폴더 목록 — is_dir=1인 항목 전체, full_path 정렬
-        public string FoldersByDriveJson(long driveId, int limit)
+        public string FoldersByDriveJson(long driveId, int limit, string? sort=null)
         {
             lock (_gate)
             {
                 using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"SELECT name,is_dir,size,full_path,color,mtime,
+                cmd.CommandText = @"SELECT drive_id,name,is_dir,size,full_path,color,mtime,
                     (SELECT COUNT(*) FROM files c WHERE c.drive_id=f.drive_id AND c.parent_path=f.full_path) AS childCount
-                    FROM files f WHERE drive_id=$d AND is_dir=1 ORDER BY full_path LIMIT $lim";
+                    FROM files f WHERE drive_id=$d AND is_dir=1 ORDER BY " + Order(sort) + " LIMIT $lim";
                 cmd.Parameters.AddWithValue("$d", driveId);
                 cmd.Parameters.AddWithValue("$lim", limit > 0 ? limit : 50000);
                 return ReadRows(cmd);
@@ -589,7 +554,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
         }
 
         // 카테고리(확장자 목록) 필터 — extCsv는 'jpg,png,...'. 앞에 '!'면 제외(기타용)
-        public string FilesByExtsJson(long driveId, string extCsv, int limit)
+        public string FilesByExtsJson(long driveId, string extCsv, int limit, string? sort=null)
         {
             bool exclude = false;
             extCsv ??= "";
@@ -605,25 +570,12 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
             lock (_gate)
             {
                 using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"SELECT name,is_dir,size,full_path,color,mtime FROM files
+                cmd.CommandText = @"SELECT drive_id,name,is_dir,size,full_path,color,mtime FROM files
                     WHERE drive_id=$d AND is_dir=0 AND
-                    LOWER(CASE WHEN instr(name,'.')>0 THEN replace(name, rtrim(name, replace(name,'.','')), '') ELSE '' END) " + op + " (" + inClause + @")
-                    ORDER BY name COLLATE NOCASE LIMIT $lim";
+                    lower(file_ext(name)) " + op + " (" + inClause + @")
+                    ORDER BY " + Order(sort) + " LIMIT $lim";
                 cmd.Parameters.AddWithValue("$d", driveId);
                 cmd.Parameters.AddWithValue("$lim", limit);
-                return ReadRows(cmd);
-            }
-        }
-
-        // 드라이브 목록 + 파일 수
-        public string ListDrivesJson()
-        {
-            lock (_gate)
-            {
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText = @"SELECT d.*,
-                    (SELECT COUNT(*) FROM files f WHERE f.drive_id=d.id AND f.is_dir=0) AS fileCount
-                    FROM drives d ORDER BY d.num";
                 return ReadRows(cmd);
             }
         }
@@ -650,7 +602,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
             {
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"SELECT
-                    LOWER(CASE WHEN instr(name,'.')>0 THEN replace(name, rtrim(name, replace(name,'.','')), '') ELSE '' END) AS ext,
+                    lower(file_ext(name)) AS ext,
                     COUNT(*) AS cnt, COALESCE(SUM(size),0) AS kb
                     FROM files WHERE drive_id=$d AND is_dir=0 GROUP BY ext";
                 cmd.Parameters.AddWithValue("$d", driveId);
@@ -683,7 +635,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
         }
 
         // 전체 드라이브 파일을 CSV로 직접 작성 (대용량 안전, 메모리 안 씀)
-        public void ExportCsv(string path)
+        public void ExportCsv(string path, IEnumerable<long> ids)
         {
             lock (_gate)
             {
@@ -692,8 +644,7 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                 sw.WriteLine("드라이브번호,드라이브이름,파일경로,파일이름,크기(KB),분류,수정일");
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText = @"SELECT d.num, d.name AS dname, f.full_path, f.name AS fname, f.size, f.mtime
-                    FROM files f JOIN drives d ON d.id=f.drive_id WHERE f.is_dir=0
-                    ORDER BY d.num, f.full_path";
+                    FROM files f JOIN drives d ON d.id=f.drive_id WHERE f.is_dir=0 AND " + Scope(ids,"f.drive_id") + " ORDER BY d.num, f.full_path";
                 using var r = cmd.ExecuteReader();
                 while (r.Read())
                 {
@@ -722,13 +673,13 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
         // 세느라 **본 작업 시작 전에 3분 20초**가 걸렸고(진행바가 멈춘 것처럼 보였다), 정작 뷰어는
         // 그 값을 쓰지 않는다(항목 수는 브라우저가 트리에서 직접 센다).
         // 또 락을 드라이브 1개 단위로만 잡아, 내보내기 중에도 앱의 조회가 끼어들 수 있게 한다.
-        public List<string> ExportViewer(string path, Action<int, int>? onProgress = null)
+        public List<string> ExportViewer(string path, IEnumerable<long> ids, Action<int, int>? onProgress = null)
         {
             var drives = new List<(long id, string num, string name, bool dead)>();
             lock (_gate)
             {
                 using var dcmd = _conn.CreateCommand();
-                dcmd.CommandText = "SELECT id, num, name, health_status FROM drives ORDER BY num";
+                dcmd.CommandText = "SELECT id, num, name, health_status FROM drives WHERE " + Scope(ids,"id") + " ORDER BY num";
                 using var dr = dcmd.ExecuteReader();
                 while (dr.Read())
                     drives.Add((dr.GetInt64(0), dr.GetValue(1)?.ToString() ?? "0",
@@ -852,19 +803,19 @@ async function inflate(i){
 
 // 텍스트(한 줄 = 'D'|'F' + 경로) → 폴더 트리
 function buildTree(text){
-  var root={c:{},f:[]}, i=0, n=text.length;
+  var root={c:Object.create(null),f:[]}, i=0, n=text.length;
   while(i<n){
     var j=text.indexOf('\n',i); if(j<0)j=n;
     if(j>i){
       var isDir=text.charCodeAt(i)===68; // 'D'
-      var p=text.substring(i+1,j), parts=p.split('/'), curN=root;
+      var p=JSON.parse(text.substring(i+1,j)), parts=p.split('/'), curN=root;
       for(var k=0;k<parts.length-1;k++){
         var s=parts[k], nx=curN.c[s];
-        if(!nx){nx={c:{},f:[]};curN.c[s]=nx;}
+        if(!nx){nx={c:Object.create(null),f:[]};curN.c[s]=nx;}
         curN=nx;
       }
       var last=parts[parts.length-1];
-      if(isDir){ if(!curN.c[last])curN.c[last]={c:{},f:[]}; }
+      if(isDir){ if(!curN.c[last])curN.c[last]={c:Object.create(null),f:[]}; }
       else curN.f.push(last);
     }
     i=j+1;
@@ -904,9 +855,9 @@ function renderTree(){
 }
 
 async function selDrive(i){
-  if(busy)return; busy=true;
+  if(busy)return; busy=true;var request=++_seq;clearTimeout(_t);
   try{
-    cur=i; openState={}; byId('q').value=''; renderBar();
+    cur=i;curText=null;curTree=null;openState={}; byId('q').value=''; renderBar();
     // 고장(스캔 불가)으로 등록된 하드 — 목록이 없는 이유를 분명히 알린다(스캔 누락이 아님)
     if(DRIVES[i].dead){
       curText=null; curTree=null;
@@ -918,7 +869,7 @@ async function selDrive(i){
     byId('tree').innerHTML='';
     curText=await inflate(i);      // 이 드라이브만 해제 (메모리 절약)
     curTree=buildTree(curText);
-    renderTree();
+    if(request===_seq||!byId('q').value.trim())renderTree();
   }catch(e){ byId('tree').innerHTML=""<div class='err'>불러오기 실패: ""+esc(e.message)+'</div>'; }
   finally{ busy=false; }
 }
@@ -944,58 +895,55 @@ function goTo(di,p){
 // 섞어서 모으면 ① 상위 폴더가 검색어인 하위 항목(이름엔 검색어가 없음)이 이름 부분일치와 같은
 // 등급으로 끼어들어 순서가 뒤죽박죽이 되고, ② 그런 항목이 하드당 상한을 잡아먹어 진짜 이름
 // 일치 결과가 밀려난다.
-async function searchAll(q){
-  var ql=q.toLowerCase(), nameOut=[], pathOut=[];
-  var PER_NAME=400, PER_PATH=60, TOTAL=4000;
-  for(var di=0; di<DRIVES.length; di++){
-    if(DRIVES[di].dead) continue;   // 고장 하드는 목록이 없으므로 건너뜀
-    setInfo('검색 중... ('+(di+1)+'/'+DRIVES.length+' 하드, '+nameOut.length+'개 발견)');
-    var text = (di===cur && curText) ? curText : await inflate(di);
-    var i=0, n=text.length, nHit=0, pHit=0;
-    while(i<n){
-      var j=text.indexOf('\n',i); if(j<0)j=n;
+async function searchAll(q,sequence){
+  function stale(){return sequence!==undefined&&sequence!==_seq;}
+  var ql=q.toLowerCase(), nameOut=[], pathOut=[], totalName=0,totalPath=0;
+  function rank(x){var n=x.n.toLowerCase();return n===ql?0:n.indexOf(ql)===0?1:2;}
+  function cmp(a,b){return (b.dir-a.dir)||(rank(a)-rank(b))||(a.n.length-b.n.length)||a.n.localeCompare(b.n,'ko');}
+  // Bounded top candidates, but inspect EVERY entry on EVERY drive before reporting totals.
+  for(var di=0;di<DRIVES.length;di++){
+    if(stale())return [];
+    if(DRIVES[di].dead)continue;
+    setInfo('검색 중... ('+(di+1)+'/'+DRIVES.length+' 하드)');
+    var text=(di===cur&&curText)?curText:await inflate(di),i=0,processed=0;
+    if(stale())return [];
+    while(i<text.length){
+      var j=text.indexOf('\n',i);if(j<0)j=text.length;
       if(j>i){
-        var line=text.substring(i,j);
-        if(line.toLowerCase().indexOf(ql,1)>0){
-          var p=line.substring(1), nm=p.substring(p.lastIndexOf('/')+1);
-          var item={di:di, dir:line.charCodeAt(0)===68, p:p, n:nm};
-          if(nm.toLowerCase().indexOf(ql)>=0){ if(nHit<PER_NAME){nameOut.push(item);nHit++;} }
-          else { if(pHit<PER_PATH){pathOut.push(item);pHit++;} }
+        var p=JSON.parse(text.substring(i+1,j)),nm=p.substring(p.lastIndexOf('/')+1);
+        if(p.toLowerCase().indexOf(ql)>=0){
+          var item={di:di,dir:text.charCodeAt(i)===68,p:p,n:nm};
+          if(nm.toLowerCase().indexOf(ql)>=0){nameOut.push(item);totalName++;}
+          else{item.viaPath=true;pathOut.push(item);totalPath++;}
+          if(nameOut.length>=1000){nameOut.sort(cmp);nameOut.length=500;}
+          if(pathOut.length>=1000){pathOut.sort(cmp);pathOut.length=500;}
         }
       }
       i=j+1;
-      if((nHit>=PER_NAME&&pHit>=PER_PATH) || nameOut.length>=TOTAL)break;  // 이 하드만 중단
+      if(++processed%20000===0){await new Promise(function(r){setTimeout(r,0);});if(stale())return [];}
     }
-    if(nameOut.length>=TOTAL)break;
-    await new Promise(function(r){setTimeout(r,0);});  // 진행 표시가 멈추지 않게 양보
+    await new Promise(function(r){setTimeout(r,0);});
   }
-  // 이름 일치: 폴더 먼저 → 정확 > 앞부분 > 부분 → 짧은 이름
-  function scr(s){s=s.toLowerCase(); if(s===ql)return 0; if(s.indexOf(ql)===0)return 1; return 2;}
-  nameOut.sort(function(a,b){
-    return (b.dir-a.dir) || (scr(a.n)-scr(b.n)) || (a.n.length-b.n.length) || a.n.localeCompare(b.n,'ko');
-  });
-  // 경로만 일치(상위 폴더가 검색어인 하위 항목): 항상 이름 일치 뒤에
-  pathOut.sort(function(a,b){ return (b.dir-a.dir) || a.p.localeCompare(b.p,'ko'); });
-  for(var k=0;k<pathOut.length;k++) pathOut[k].viaPath=true;
-  return nameOut.concat(pathOut);
+  nameOut.sort(cmp);pathOut.sort(cmp);
+  var out=nameOut.slice(0,500).concat(pathOut.slice(0,500));out.total=totalName+totalPath;return out;
 }
 
 var _seq=0;
 async function onSearch(q){
+  var my=++_seq;
   q=(q||'').trim();
   if(!q){ renderBar(); renderTree(); return; }
   if(q.length<2){ setInfo('2글자 이상 입력하세요'); return; }
-  var my=++_seq;
   setInfo('검색 준비...');
-  var all=await searchAll(q);
+  var all;try{all=await searchAll(q,my);}catch(e){if(my===_seq)setInfo('검색 실패: '+e.message);return;}
   if(my!==_seq)return;   // 입력이 바뀌면 결과 버림
   var nd=0,np=0;
   for(var k=0;k<all.length;k++){ if(all[k].dir)nd++; if(all[k].viaPath)np++; }
   var res=all.slice(0,500);
   _rows=[];
-  setInfo('폴더 '+nd+'개 · 파일 '+(all.length-nd)+'개'
+  setInfo('전체 '+all.total+'개 일치 · 표시 후보 폴더 '+nd+'개 · 파일 '+(all.length-nd)+'개'
     +(np?' (이름 일치 '+(all.length-np)+' + 상위폴더 일치 '+np+')':'')
-    +(all.length>500?' · 상위 500 표시':''));
+    +(all.total>500?' · 상위 500개 표시':''));
   byId('tree').innerHTML = res.length ? res.map(function(f){
     var ic=f.dir?'📁':'📄', extra='';
     if(f.dir){ var ri=_rows.length; _rows.push({di:f.di,p:f.p}); extra="" data-nav='""+ri+""'""; }
@@ -1017,7 +965,8 @@ byId('tree').addEventListener('click',function(e){
 });
 var _t;
 byId('q').addEventListener('input',function(e){
-  clearTimeout(_t); var v=e.target.value;
+  clearTimeout(_t);++_seq;var v=e.target.value;
+  if(!v.trim()){onSearch(v);return;}
   _t=setTimeout(function(){ onSearch(v); },350);
 });
 
@@ -1063,22 +1012,34 @@ else {
             return sb.ToString();
         }
 
-        // catalog.db → catalog.db.bak 안전 백업 (열린 상태에서도 가능)
+        // catalog.db → catalog.db.bak 안전 백업 (열린 상태에서도 가능). 락 안에서 호출할 것.
+        public void BackupTo(string destination)
+        {
+            lock(_gate)
+            {
+                var temp=destination+".tmp-"+Guid.NewGuid().ToString("N");
+                try
+                {
+                    using(var d=new SqliteConnection(new SqliteConnectionStringBuilder {DataSource=temp,Pooling=false}.ToString()))
+                    { d.Open(); _conn.BackupDatabase(d); }
+                    File.Move(temp,destination,true);
+                    SetMeta("last_backup",DateTimeOffset.Now.ToString("o"));
+                    _dirtySinceBackup=false;
+                }
+                finally { if(File.Exists(temp))File.Delete(temp); }
+            }
+        }
+        private void BackupLocked() => BackupTo(Path+".bak");
+
+        // 수동 백업 — 더티 여부·크기 제한 없이 사용자가 원할 때 수행
         public void BackupSelf()
         {
-            lock (_gate)
-            {
-                var dest = Path + ".bak";
-                using var d = new SqliteConnection($"Data Source={dest}");
-                d.Open();
-                _conn.BackupDatabase(d);
-                _dirtySinceBackup = false;
-            }
+            lock (_gate) { BackupLocked(); }
         }
 
         public long FileSizeBytes
         {
-            get { try { return new FileInfo(Path).Length; } catch { return 0; } }
+            get { try { return new FileInfo(Path).Length + (File.Exists(Path+"-wal") ? new FileInfo(Path+"-wal").Length : 0); } catch { return 0; } }
         }
 
         // 이 크기를 넘으면 종료 시 자동 백업을 하지 않는다.
@@ -1096,14 +1057,9 @@ else {
             if (!System.Threading.Monitor.TryEnter(_gate, 1000)) return false;
             try
             {
-                var dest = Path + ".bak";
-                using var d = new SqliteConnection($"Data Source={dest}");
-                d.Open();
-                _conn.BackupDatabase(d);
-                _dirtySinceBackup = false;
+                BackupLocked();
                 return true;
             }
-            catch { return false; }
             finally { System.Threading.Monitor.Exit(_gate); }
         }
 

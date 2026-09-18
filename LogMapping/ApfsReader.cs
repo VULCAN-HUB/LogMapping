@@ -1,4 +1,4 @@
-// ApfsReader.cs — Read-only APFS file-listing for Windows
+﻿// ApfsReader.cs — Read-only APFS file-listing for Windows
 // Supports: single/multi-volume containers, uncrypted volumes
 // Does not support: FileVault encryption, APFS-compressed file size lookup (shows 0)
 
@@ -14,6 +14,7 @@ namespace LogMapping
         public ulong PhysBlock    { get; init; }
         public ulong OmapPhys     { get; init; }
         public ulong RootTreeOid  { get; init; }
+        public string? VolumeId { get; init; }
         public string Name        { get; init; } = "";
         public ulong UsedMB       { get; init; }
     }
@@ -23,6 +24,8 @@ namespace LogMapping
         private readonly Stream _stream;
         private readonly long   _partitionOffset; // 물리 디스크에서 파티션 시작 바이트 오프셋
         private uint _blockSize = 4096;
+        private readonly CancellationToken _token;
+        public long TotalMB { get; private set; }
 
         // Magic values
         private const uint NXSB = 0x4253584E;
@@ -44,10 +47,11 @@ namespace LogMapping
         // Root directory inode number
         private const ulong ROOT_INO = 2;
 
-        public ApfsReader(Stream stream, long partitionOffset = 0)
+        public ApfsReader(Stream stream, long partitionOffset = 0, CancellationToken token = default)
         {
             _stream          = stream;
             _partitionOffset = partitionOffset;
+            _token=token;
         }
 
         // 물리 디스크 스트림에서 파티션 오프셋을 지정해 NXSB 여부 확인
@@ -61,13 +65,14 @@ namespace LogMapping
                 int n = stream.Read(b, 0, 512);
                 return n >= 36 && BitConverter.ToUInt32(b, 32) == NXSB;
             }
-            catch { return false; }
+            catch (OperationCanceledException) { throw; } catch { return false; }
         }
 
         // ── block I/O ────────────────────────────────────────────────────────
 
         private byte[] ReadBlock(ulong n)
         {
+            _token.ThrowIfCancellationRequested();
             var buf = new byte[_blockSize];
             long pos = _partitionOffset + (long)(n * _blockSize);
             // Position 할당 (물리 드라이브에서 Seek 대신 Position 사용)
@@ -79,6 +84,7 @@ namespace LogMapping
                 if (r == 0) break;
                 done += r;
             }
+            if(done!=buf.Length) throw new EndOfStreamException("APFS 블록을 끝까지 읽지 못했습니다.");
             return buf;
         }
 
@@ -100,6 +106,7 @@ namespace LogMapping
             if (_blockSize < 512 || _blockSize > 65536) return result;
 
             sb = ReadBlock(0); // re-read with correct block size
+            TotalMB=checked((long)(U64(sb,40)*_blockSize/1024/1024));
 
             // nx_superblock_t offsets:
             //  104: nx_xp_desc_blocks (4) — total blocks in descriptor area
@@ -129,7 +136,7 @@ namespace LogMapping
                 {
                     ulong blkNum = xpDescBase + (xpDescIndex + i) % xpDescBlocks;
                     byte[] blk;
-                    try { blk = ReadBlock(blkNum); } catch { continue; }
+                    try { blk = ReadBlock(blkNum); } catch (OperationCanceledException) { throw; } catch { continue; }
                     if (blk.Length < 40) continue;
                     if (U32(blk, 32) != NXSB) continue;
                     ulong xid = U64(blk, 16); // o_xid at offset 16
@@ -157,7 +164,7 @@ namespace LogMapping
                 {
                     ulong blkNum = xpDescBase + i;
                     byte[] blk;
-                    try { blk = ReadBlock(blkNum); } catch { continue; }
+                    try { blk = ReadBlock(blkNum); } catch (OperationCanceledException) { throw; } catch { continue; }
 
                     ushort objType = (ushort)(U32(blk, 24) & 0xFFFF);
                     if (objType != TYPE_CHECKPOINT_MAP) continue;
@@ -186,7 +193,7 @@ namespace LogMapping
                 {
                     ulong blkNum = xpDataBase + (xpDataIndex + i) % xpDataBlocks;
                     byte[] blk;
-                    try { blk = ReadBlock(blkNum); } catch { continue; }
+                    try { blk = ReadBlock(blkNum); } catch (OperationCanceledException) { throw; } catch { continue; }
                     if (blk.Length > 36 && U32(blk, 32) == APSB)
                         apsbBlocks.Add(blkNum);
                 }
@@ -255,7 +262,7 @@ namespace LogMapping
                     // 현재 체크포인트 바로 앞 블록부터 역방향
                     ulong blkNum = xpDataBase + (xpDataIndex + xpDataBlocks - 1 - i) % xpDataBlocks;
                     byte[] b;
-                    try { b = ReadBlock(blkNum); } catch { continue; }
+                    try { b = ReadBlock(blkNum); } catch (OperationCanceledException) { throw; } catch { continue; }
                     if (b.Length <= 36) continue;
                     bool isApsbMagic = U32(b, 32) == APSB;
                     bool isFsType    = (U32(b, 24) & 0xFFFF) == 0x000D;
@@ -278,7 +285,7 @@ namespace LogMapping
                     for (uint i = 0; i < scanB; i++)
                     {
                         byte[] blk;
-                        try { blk = ReadBlock(xpDescBase + i); } catch { continue; }
+                        try { blk = ReadBlock(xpDescBase + i); } catch (OperationCanceledException) { throw; } catch { continue; }
                         if ((U32(blk, 24) & 0xFFFF) != TYPE_CHECKPOINT_MAP) continue;
                         uint count = U32(blk, 36);
                         for (uint j = 0; j < count && j < 4096; j++)
@@ -329,7 +336,7 @@ namespace LogMapping
                     {
                         ulong blkNum = xpDescBase + i;
                         byte[] blk;
-                        try { blk = ReadBlock(blkNum); } catch { continue; }
+                        try { blk = ReadBlock(blkNum); } catch (OperationCanceledException) { throw; } catch { continue; }
 
                         ushort objType = (ushort)(U32(blk, 24) & 0xFFFF);
                         if (i < 6) cmBlockTypes.Append($"[{blkNum}:{objType:X}]");
@@ -352,7 +359,7 @@ namespace LogMapping
                         }
                     }
                 }
-                catch (Exception ex) { rawScanDbg = "ERR:" + ex.Message; }
+                catch (OperationCanceledException) { throw; } catch (Exception ex) { rawScanDbg = "ERR:" + ex.Message; }
 
                 // ── 체크포인트 맵 첫 항목 raw bytes (블록 idx, idx+1 모두 시도) ──────
                 string mapRaw0 = "?", mapRaw1 = "?";
@@ -365,7 +372,7 @@ namespace LogMapping
                     if (dumpLen > 0)
                         mapRaw0 = $"t={t:X} [{BitConverter.ToString(d, 40, dumpLen).Replace("-","")}]";
                 }
-                catch { mapRaw0 = "ERR"; }
+                catch (OperationCanceledException) { throw; } catch { mapRaw0 = "ERR"; }
                 try
                 {
                     ulong cmBlk1 = xpDescBase + (xpDescIndex + 1) % xpDescBlocks;
@@ -375,7 +382,7 @@ namespace LogMapping
                     if (dumpLen > 0)
                         mapRaw1 = $"t={t:X} [{BitConverter.ToString(d, 40, dumpLen).Replace("-","")}]";
                 }
-                catch { mapRaw1 = "ERR"; }
+                catch (OperationCanceledException) { throw; } catch { mapRaw1 = "ERR"; }
 
                 // ── OMAP 블록 dump ────────────────────────────────────────────────────
                 ulong omapPhysDbg = U64(activeSb, 160);
@@ -403,7 +410,7 @@ namespace LogMapping
                     bool found = OmapLookup(omapResolved, 1026, out ulong r1026);
                     omapDbg2 = $"found={found} res1026={r1026}";
                 }
-                catch (Exception ex) { omapDbg2 = "ERR:" + ex.Message; }
+                catch (OperationCanceledException) { throw; } catch (Exception ex) { omapDbg2 = "ERR:" + ex.Message; }
 
                 // ── 데이터 영역 바깥 스캔 (27954~30000) ──────────────────────────────
                 string extraScan = "0";
@@ -414,12 +421,12 @@ namespace LogMapping
                     int   extraFound = 0;
                     for (ulong bn = extraStart; bn < extraEnd; bn++)
                     {
-                        byte[] b; try { b = ReadBlock(bn); } catch { continue; }
+                        byte[] b; try { b = ReadBlock(bn); } catch (OperationCanceledException) { throw; } catch { continue; }
                         if (b.Length > 36 && U32(b, 32) == APSB) { extraFound++; AddVolumeFromBlock(bn, result); }
                     }
                     extraScan = extraFound.ToString();
                 }
-                catch { extraScan = "ERR"; }
+                catch (OperationCanceledException) { throw; } catch { extraScan = "ERR"; }
 
                 throw new Exception(
                     $"APFS 볼륨 없음\n" +
@@ -446,7 +453,7 @@ namespace LogMapping
         private void AddVolumeFromBlock(ulong physBlock, List<ApfsVolumeInfo> result)
         {
             byte[] volBlk;
-            try { volBlk = ReadBlock(physBlock); } catch { return; }
+            try { volBlk = ReadBlock(physBlock); } catch (OperationCanceledException) { throw; } catch { return; }
             if (U32(volBlk, 32) != APSB) return;
 
             // apfs_superblock_t offsets:
@@ -457,7 +464,7 @@ namespace LogMapping
             // 480: apfs_volname (256 bytes UTF-8)
 
             ulong incompat    = U64(volBlk, 56);
-            bool  encrypted   = (incompat & 0x80UL) != 0;
+            bool  encrypted   = (U64(volBlk,264) & 1UL) == 0; // apfs_fs_flags / APFS_FS_UNENCRYPTED
             ulong omapPhys    = U64(volBlk, 128);
             ulong rootTreeOid = U64(volBlk, 136);
 
@@ -468,16 +475,21 @@ namespace LogMapping
             string name = "";
             try
             {
-                int nameEnd = Array.IndexOf(volBlk, (byte)0, 480, 256);
-                int nameLen = (nameEnd < 0 ? 480 + 256 : nameEnd) - 480;
-                name = Encoding.UTF8.GetString(volBlk, 480, Math.Max(0, nameLen));
+                int nameEnd = Array.IndexOf(volBlk, (byte)0, 704, 256);
+                int nameLen = (nameEnd < 0 ? 704 + 256 : nameEnd) - 704;
+                name = Encoding.UTF8.GetString(volBlk, 704, Math.Max(0, nameLen));
             }
-            catch { }
+            catch (OperationCanceledException) { throw; } catch { }
 
             if (encrypted) name += " (암호화됨, 목록 불가)";
 
+            // Apple APFS reference: packed apfs_superblock, uuid at 240, volname at 704.
+            var uuidBytes=volBlk.AsSpan(240,16).ToArray();
+            var volumeId=uuidBytes.Any(b=>b!=0)?"APFS-"+Convert.ToHexString(uuidBytes):null;
+            if(result.Any(v=>volumeId!=null && v.VolumeId==volumeId))return;
             result.Add(new ApfsVolumeInfo
             {
+                VolumeId    = volumeId,
                 PhysBlock   = physBlock,
                 OmapPhys    = encrypted ? 0 : omapPhys,
                 RootTreeOid = encrypted ? 0 : rootTreeOid,
@@ -506,7 +518,7 @@ namespace LogMapping
 
                 return SearchOmapTree(treePhys, targetOid, out physAddr);
             }
-            catch { return false; }
+            catch (OperationCanceledException) { throw; } catch { return false; }
         }
 
         private bool SearchOmapTree(ulong nodePhys, ulong targetOid, out ulong physAddr)
@@ -518,7 +530,7 @@ namespace LogMapping
             while (visited.Add(cur) && visited.Count < 10000)
             {
                 byte[] nd;
-                try { nd = ReadBlock(cur); } catch { return false; }
+                try { nd = ReadBlock(cur); } catch (OperationCanceledException) { throw; } catch { return false; }
 
                 ushort flags    = U16(nd, 32);
                 uint   nkeys    = U32(nd, 36);
@@ -585,67 +597,6 @@ namespace LogMapping
 
         // ── FS B-tree: collect all DREC + INODE records ──────────────────────
 
-        public List<object> WalkVolume(ulong omapPhys, ulong rootTreeVirtualOid)
-        {
-            if (!OmapLookup(omapPhys, rootTreeVirtualOid, out ulong rootPhys))
-                throw new Exception("APFS FS 트리 루트를 찾을 수 없습니다.");
-
-            var drecs      = new Dictionary<ulong, List<(string name, ulong childOid, bool isDir)>>();
-            var inodes     = new Dictionary<ulong, long>();
-            var inodeDirs  = new Dictionary<ulong, bool>(); // inode OID → isDir (from mode field)
-            var inodeMtimes = new Dictionary<ulong, string>(); // inode OID → mod_time (yyyy-MM-dd)
-            var visited    = new HashSet<ulong>();
-
-            CollectRecords(rootPhys, omapPhys, drecs, inodes, inodeDirs, inodeMtimes, visited);
-
-            var tree = BuildTree(ROOT_INO, drecs, inodes, inodeDirs, inodeMtimes, new HashSet<ulong>());
-
-            // 결과가 비어있거나 파일이 없으면 디버그 정보 예외
-            int fileCount = 0;
-            void CountAll(List<object> nodes) {
-                foreach (var n in nodes) {
-                    var t = n.GetType();
-                    var typeProp = t.GetProperty("type");
-                    if (typeProp?.GetValue(n)?.ToString() == "file") fileCount++;
-                    else {
-                        var ch = t.GetProperty("children")?.GetValue(n) as List<object>;
-                        if (ch != null) CountAll(ch);
-                    }
-                }
-            }
-            CountAll(tree);
-
-            if (fileCount == 0)
-            {
-                // 루트 노드 첫 항목 raw bytes 덤프
-                string rootDump = "?";
-                try {
-                    var rb = ReadBlock(rootPhys);
-                    ushort rf = U16(rb,32); uint rn = U32(rb,36);
-                    ushort rt = U16(rb,40); ushort rl = U16(rb,42);
-                    int keyBase = 56 + rt + rl;
-                    string firstKey = rb.Length > keyBase + 16
-                        ? BitConverter.ToString(rb, keyBase, 16).Replace("-","") : "?";
-                    rootDump = $"flags={rf:X} nkeys={rn} tocOff={rt} tableLen={rl} keyBase={keyBase} firstKey={firstKey}";
-                } catch { rootDump = "ERR"; }
-
-                // drecs[2] 내용
-                string drecs2 = drecs.TryGetValue(2, out var r2)
-                    ? $"{r2.Count}개:[{string.Join(",", r2.Take(3).Select(x=>x.name))}]" : "없음";
-                string topOids = string.Join(",", drecs.Keys.Take(8));
-
-                throw new Exception(
-                    $"파일 없음 (디버그)\n" +
-                    $"nodesVisited={visited.Count} drecs.Keys={drecs.Count} inodes={inodes.Count}\n" +
-                    $"rootPhys={rootPhys} omapPhys={omapPhys}\n" +
-                    $"rootNode={rootDump}\n" +
-                    $"drecs[2]={drecs2}\n" +
-                    $"drecOIDs=[{topOids}]");
-            }
-
-            return tree;
-        }
-
         // ── 스트리밍 순회 (트리를 메모리에 만들지 않음, OOM 방지) ──────────────────
         // BuildTree와 동일한 분류 규칙을 쓰되, 노드를 만들 때마다 emit으로 흘려보낸다.
         public int WalkVolumeStream(ulong omapPhys, ulong rootTreeVirtualOid,
@@ -666,10 +617,6 @@ namespace LogMapping
             Action<string, string, bool, long, string> w = (pp, n, d, s, m) => { count++; emit(pp, n, d, s, m); };
             EmitTree(ROOT_INO, "", drecs, inodes, inodeDirs, inodeMtimes, new HashSet<ulong>(), w);
 
-            if (count == 0)
-                throw new Exception(
-                    $"APFS 볼륨에서 파일을 찾지 못했습니다.\n" +
-                    $"drecs.Keys={drecs.Count} inodes={inodes.Count} nodesVisited={visited.Count} rootPhys={rootPhys}");
             return count;
         }
 
@@ -689,17 +636,7 @@ namespace LogMapping
             foreach (var (name, childOid, isDir) in entries)
             {
                 string mtime = inodeMtimes.TryGetValue(childOid, out var mt) ? mt : "";
-                bool hasExtension = name.Contains('.') &&
-                                    name.LastIndexOf('.') < name.Length - 1 &&
-                                    name.LastIndexOf('.') > 0;
                 string full = parentPath.Length == 0 ? name : parentPath + "/" + name;
-
-                if (hasExtension)
-                {
-                    long sizeKB = inodes.TryGetValue(childOid, out long s) ? s : 1;
-                    emit(parentPath, name, false, sizeKB, mtime);
-                    continue;
-                }
 
                 bool actualIsDir = inodeDirs.TryGetValue(childOid, out bool modeDir) ? modeDir : isDir;
                 if (actualIsDir)
@@ -742,7 +679,7 @@ namespace LogMapping
                         "데이터 무결성을 위해 불완전한 결과를 저장하지 않고 스캔을 중단합니다.");
 
                 byte[] nd;
-                try { nd = ReadBlock(cur); } catch { continue; }
+                nd = ReadBlock(cur); // Fail incomplete scans instead of replacing good data.
 
                 ushort flags  = U16(nd, 32);
                 uint   nkeys    = U32(nd, 36);
@@ -808,9 +745,9 @@ namespace LogMapping
 
                         string name;
                         try { name = Encoding.UTF8.GetString(nd, kPos + 12, nameLen - 1); }
-                        catch { continue; }
+                        catch (OperationCanceledException) { throw; } catch { continue; }
 
-                        if (string.IsNullOrEmpty(name) || name.StartsWith(".")) continue;
+                        if (string.IsNullOrEmpty(name) || name=="." || name=="..") continue;
 
                         ulong  fileId = U64(nd, vPos);
                         // j_drec_val_t.flags: offset 16 when date_added(8) present, else offset 8
@@ -863,7 +800,7 @@ namespace LogMapping
                                     try {
                                         var dt = DateTimeOffset.FromUnixTimeSeconds((long)(ns / 1_000_000_000UL));
                                         inodeMtimes[oid] = dt.ToString("yyyy-MM-dd");
-                                    } catch { }
+                                    } catch (OperationCanceledException) { throw; } catch { }
                                 }
                             }
 
@@ -913,57 +850,6 @@ namespace LogMapping
             }
         }
 
-        private static List<object> BuildTree(
-            ulong dirOid,
-            Dictionary<ulong, List<(string name, ulong childOid, bool isDir)>> drecs,
-            Dictionary<ulong, long> inodes,
-            Dictionary<ulong, bool> inodeDirs,
-            Dictionary<ulong, string> inodeMtimes,
-            HashSet<ulong> seen)
-        {
-            var result = new List<object>();
-            if (!drecs.TryGetValue(dirOid, out var entries)) return result;
-            if (!seen.Add(dirOid)) return result; // cycle guard
-
-            foreach (var (name, childOid, isDir) in entries)
-            {
-                string mtime = inodeMtimes.TryGetValue(childOid, out var mt) ? mt : "";
-                // 확장자 있는 항목(name.ext)은 Mac 패키지 포함 모두 파일로 처리
-                // 일반 폴더는 확장자가 없음 (예: "테스트 촬영", "인생4컷")
-                bool hasExtension = name.Contains('.') &&
-                                    name.LastIndexOf('.') < name.Length - 1 &&
-                                    name.LastIndexOf('.') > 0;
-                if (hasExtension)
-                {
-                    long sizeKB = inodes.TryGetValue(childOid, out long s) ? s : 1;
-                    result.Add(new { type = "file", name, size = sizeKB, mtime });
-                    continue;
-                }
-
-                // 확장자 없는 항목: inode mode → drec dtype 순으로 폴더 여부 판별
-                bool actualIsDir;
-                if (inodeDirs.TryGetValue(childOid, out bool modeDir))
-                    actualIsDir = modeDir;
-                else
-                    actualIsDir = isDir;
-
-                if (actualIsDir)
-                {
-                    var children = BuildTree(childOid, drecs, inodes, inodeDirs, inodeMtimes, seen);
-                    result.Add(new { type = "dir", name, children });
-                }
-                else
-                {
-                    long sizeKB = inodes.TryGetValue(childOid, out long s) ? s : 1;
-                    result.Add(new { type = "file", name, size = sizeKB, mtime });
-                }
-            }
-
-            return result;
-        }
-
-        // ── 블록의 TOC 항목 크기 자동 감지 ────────────────────────────────────────
-        // 4-byte kvoff_t vs 8-byte kvloc_t 중 더 많은 유효 레코드를 주는 쪽을 선택
         private int DetectTocStride(byte[] nd, int tocStart, int keyAreaBase, uint nkeys, int trailing)
         {
             int score4 = 0, score8 = 0;

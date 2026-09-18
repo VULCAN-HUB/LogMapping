@@ -1,8 +1,9 @@
-using DiscUtils.HfsPlus;
+﻿using DiscUtils.HfsPlus;
 using Microsoft.Web.WebView2.Core;
 using System.IO;
 using System.Management;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -26,7 +27,9 @@ namespace LogMapping
 
         private async void InitWebView()
         {
-            Directory.CreateDirectory(DataDir);
+            try
+            { Directory.CreateDirectory(DataDir); }
+            catch(Exception ex) { MessageBox.Show("data 폴더를 만들 수 없습니다. 쓰기 가능한 위치로 프로그램을 옮겨 주세요.\n"+ex.Message); Application.Current.Shutdown();return; }
 
             try
             {
@@ -57,13 +60,13 @@ namespace LogMapping
 
             webView.CoreWebView2.AddHostObjectToScript("nativeBridge", new NativeBridge(_appDir, DataDir));
             webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
+            webView.CoreWebView2.NavigationStarting += (_,e)=> { if(!IsAppOrigin(e.Uri))e.Cancel=true; };
+            webView.CoreWebView2.NewWindowRequested += (_,e)=>e.Handled=true;
 
             // DOM 로드 후 경로 주입
             webView.CoreWebView2.DOMContentLoaded += async (s, e) =>
             {
-                var appDirEscaped = _appDir.Replace("\\", "\\\\");
-                var dataDirEscaped = DataDir.Replace("\\", "\\\\");
-                var script = "window._APP_DIR='" + appDirEscaped + "'; window._DATA_DIR='" + dataDirEscaped + "'; if(typeof APP_DIR!=='undefined'){APP_DIR=window._APP_DIR;DATA_DIR=window._DATA_DIR;}";
+                var script = "window._APP_DIR=" + JsonSerializer.Serialize(_appDir) + ";window._DATA_DIR=" + JsonSerializer.Serialize(DataDir) + ";if(typeof APP_DIR!=='undefined'){APP_DIR=window._APP_DIR;DATA_DIR=window._DATA_DIR;}";
                 await webView.CoreWebView2.ExecuteScriptAsync(script);
             };
 
@@ -80,7 +83,7 @@ namespace LogMapping
             Directory.CreateDirectory(appDir2);
 
             var asm = Assembly.GetExecutingAssembly();
-            var resources = new[] { "index.html", "scanner.js" };
+            var resources = new[] { "index.html" };
 
             foreach (var res in resources)
             {
@@ -88,15 +91,23 @@ namespace LogMapping
                 using var stream = asm.GetManifestResourceStream(resourceName);
                 if (stream == null) continue;
                 var destPath = Path.Combine(appDir2, res);
-                // 이미 같은 크기면 재추출 스킵
-                if (File.Exists(destPath) && new FileInfo(destPath).Length == stream.Length) continue;
+                // 내용 해시가 같으면 재추출을 생략한다.
+                if(File.Exists(destPath))
+                {
+                    using var cached=File.OpenRead(destPath);
+                    var same=SHA256.HashData(cached).SequenceEqual(SHA256.HashData(stream));stream.Position=0;
+                    if(same)continue;
+                }
                 using var fs = File.Create(destPath);
                 stream.CopyTo(fs);
             }
         }
 
+        private static bool IsAppOrigin(string uri) => Uri.TryCreate(uri,UriKind.Absolute,out var u) && u.Scheme=="https" && u.Host=="logmapping.app";
+
         private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
+            if(!IsAppOrigin(e.Source))return;
             try
             {
                 var msg = JsonSerializer.Deserialize<WebMessage>(e.WebMessageAsJson,
@@ -108,24 +119,23 @@ namespace LogMapping
                     case "readFile": HandleReadFile(msg); break;
                     case "writeFile": HandleWriteFile(msg); break;
                     case "listFiles": HandleListFiles(msg); break;
-                    case "scanFolder": HandleScanFolder(msg); break;
                     case "openFileDialog": HandleOpenFileDialog(msg); break;
                     case "saveFileDialog": HandleSaveFileDialog(msg); break;
                     case "listDrives": HandleListDrives(msg); break;
                     case "openFolderDialog": HandleOpenFolderDialog(msg); break;
                     case "copyToClipboard": HandleCopyToClipboard(msg); break;
                     case "openUrl": HandleOpenUrl(msg); break;
-                    case "closeWindow": Application.Current.Dispatcher.Invoke(() => Close()); break;
                     // ── SQLite ──
+                    case "closeReady": _closeReady?.TrySetResult(msg.Content=="ok"); break;
+                    case "dbDescribe": HandleDbDescribe(msg); break;
+                    case "dbCopyColors": HandleDbCopyColors(msg); break;
                     case "dbScan": HandleDbScan(msg); break;
                     case "cancelScan": HandleCancelScan(msg); break;
                     case "dbUpdateDrive": HandleDbUpdateDrive(msg); break;
                     case "dbDeleteDrive": HandleDbDeleteDrive(msg); break;
                     case "dbChildren": HandleDbChildren(msg); break;
                     case "dbSearch": HandleDbSearch(msg); break;
-                    case "dbListDrives": HandleDbListDrives(msg); break;
                     case "dbSetColor": HandleDbSetColor(msg); break;
-                    case "dbStats": HandleDbStats(msg); break;
                     case "dbExtCounts": HandleDbExtCounts(msg); break;
                     case "dbFilesByColor": HandleDbFilesByColor(msg); break;
                     case "dbPrune": HandleDbPrune(msg); break;
@@ -160,7 +170,7 @@ namespace LogMapping
             {
                 var path = msg.Path ?? "";
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.WriteAllText(path, msg.Content ?? "");
+                AtomicStorage.Write(path, msg.Content ?? "");
                 SendToJS("writeFileResult", new { id = msg.Id, success = true, path });
             }
             catch (Exception ex) { SendToJS("writeFileResult", new { id = msg.Id, success = false, error = ex.Message }); }
@@ -178,42 +188,6 @@ namespace LogMapping
                 SendToJS("listFilesResult", new { id = msg.Id, files });
             }
             catch (Exception ex) { SendToJS("listFilesResult", new { id = msg.Id, error = ex.Message }); }
-        }
-
-        private void HandleScanFolder(WebMessage msg)
-        {
-            var folderPath = msg.Path ?? "";
-            Task.Run(() =>
-            {
-                try
-                {
-                    var fileCount = 0;
-                    List<object> tree;
-
-                    if (folderPath.StartsWith("macvol://"))
-                    {
-                        tree = WalkMacDrive(folderPath, ref fileCount, count =>
-                        {
-                            if (count % 1000 == 0)
-                                SendToJS("scanProgress", new { id = msg.Id, count });
-                        });
-                    }
-                    else
-                    {
-                        tree = WalkDir(folderPath, ref fileCount, count =>
-                        {
-                            if (count % 1000 == 0)
-                                SendToJS("scanProgress", new { id = msg.Id, count });
-                        });
-                    }
-
-                    SendToJS("scanResult", new { id = msg.Id, tree, totalFiles = fileCount });
-                }
-                catch (Exception ex)
-                {
-                    SendToJS("scanResult", new { id = msg.Id, error = ex.Message });
-                }
-            });
         }
 
         // \\.\PhysicalDriveN 을 FileStream으로 열기 (관리자 권한 필요)
@@ -263,147 +237,15 @@ namespace LogMapping
             catch { return (0, 0, 0); }
         }
 
-        // macvol://d{diskNum}o{offset}/{volIdx}  — APFS / HFS+
-        private List<object> WalkMacDrive(string macPath, ref int fileCount, Action<int> onProgress)
-        {
-            // 경로 파싱: macvol://d{diskNum}o{offset}/{volIdx}
-            var inner = macPath.Replace("macvol://", "");
-            var slashIdx = inner.IndexOf('/');
-            int volIndex   = slashIdx >= 0 ? int.Parse(inner[(slashIdx + 1)..]) : 0;
-            var diskPart   = slashIdx >= 0 ? inner[..slashIdx] : inner;
-            var oIdx       = diskPart.IndexOf('o');
-            var diskNum    = int.Parse(diskPart[1..oIdx]);
-            var partOffset = long.Parse(diskPart[(oIdx + 1)..]);
-
-            using var physStream = OpenPhysicalDrive(diskNum)
-                ?? throw new Exception("Mac 드라이브를 열 수 없습니다. 앱을 관리자 권한으로 실행해주세요.");
-
-            // HFS+ 판별: 파티션 내 offset 1024 (= partOffset + 1024, 섹터 정렬)에서 매직 확인
-            physStream.Position = partOffset + 1024; // 1024 = 2 * 512 → 섹터 정렬 OK
-            var hfsMagicBuf = new byte[4];
-            physStream.Read(hfsMagicBuf, 0, 4);
-            bool isHfsPlusDrive = (hfsMagicBuf[0] == 0x48 && hfsMagicBuf[1] == 0x2B) ||
-                                  (hfsMagicBuf[0] == 0x48 && hfsMagicBuf[1] == 0x58);
-
-            if (!isHfsPlusDrive)
-            {
-                // APFS: raw 스트림 + 파티션 오프셋 직접 전달
-                if (!ApfsReader.Detect(physStream, partOffset))
-                    throw new Exception("APFS 또는 HFS+ 파티션을 인식할 수 없습니다.");
-
-                using var apfs = new ApfsReader(physStream, partOffset);
-                var volumes = apfs.FindVolumes();
-
-                if (volIndex >= volumes.Count) volIndex = 0;
-                if (volumes.Count == 0)
-                    throw new Exception("APFS 볼륨을 찾을 수 없습니다.");
-
-                var vol = volumes[volIndex];
-                if (vol.OmapPhys == 0)
-                    throw new Exception("암호화된 볼륨은 파일 목록을 읽을 수 없습니다.");
-
-                var tree = apfs.WalkVolume(vol.OmapPhys, vol.RootTreeOid);
-                CountTree(tree, ref fileCount, onProgress);
-                return tree;
-            }
-
-            // HFS+: OffsetStream 래퍼로 DiscUtils에 전달
-            var hfsStream = new OffsetStream(physStream, partOffset, long.MaxValue / 2);
-            hfsStream.Position = 1024;
-            var magic = new byte[2];
-            hfsStream.Read(magic, 0, 2);
-            bool isHfsPlus = (magic[0] == 0x48 && magic[1] == 0x2B) ||
-                             (magic[0] == 0x48 && magic[1] == 0x58);
-            if (!isHfsPlus)
-                throw new Exception("지원하지 않는 Mac 파일시스템입니다.");
-
-            hfsStream.Position = 0;
-            using var hfs = new HfsPlusFileSystem(hfsStream);
-
-            // DiscUtils 경로 규약: 백슬래시(\), 루트 "\".
-            // 루트 조회 실패는 묵살하지 않고 예외로 띄워 실제 원인(마운트/저널 등)을 표면화한다.
-            _ = hfs.GetFileSystemEntries(@"\");
-
-            var rootResult = new List<object>();
-            var walkStack = new Stack<(string Path, List<object> Parent)>();
-            walkStack.Push((@"\", rootResult));
-
-            while (walkStack.Count > 0)
-            {
-                var (curPath, parentList) = walkStack.Pop();
-                string[] entries;
-                try { entries = hfs.GetFileSystemEntries(curPath); }
-                catch { continue; }
-
-                // 폴더 목록을 1회 조회로 받아 entry별 DirectoryExists(B-트리 재탐색) 호출 제거
-                var dirSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                try { foreach (var d in hfs.GetDirectories(curPath)) dirSet.Add(d); } catch { }
-
-                foreach (var entry in entries)
-                {
-                    var name = entry.Replace('/', '\\').TrimEnd('\\').Split('\\').LastOrDefault() ?? "";
-                    if (string.IsNullOrEmpty(name) || name.StartsWith(".")) continue;
-
-                    try
-                    {
-                        if (dirSet.Contains(entry))
-                        {
-                            var children = new List<object>();
-                            parentList.Add(new { type = "dir", name, children });
-                            walkStack.Push((entry, children));
-                        }
-                        else
-                        {
-                            fileCount++;
-                            onProgress(fileCount);
-                            var size = 0L;
-                            try { size = hfs.GetFileLength(entry) / 1024; } catch { }
-                            parentList.Add(new { type = "file", name, size = Math.Max(1, size) });
-                        }
-                    }
-                    catch { }
-                }
-            }
-
-            return rootResult;
-        }
-
         // ── 스트리밍 스캐너 (트리 미빌드, OOM 방지) ───────────────────────────────
         // 윈도우 드라이브/폴더: 노드를 만들자마자 emit(parentPath,name,isDir,sizeKB,mtime)
-        private void WalkDirStream(string dirPath, Action<string, string, bool, long, string> emit)
-        {
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var stack = new Stack<(string Path, string Rel)>();
-            stack.Push((dirPath, ""));
-            while (stack.Count > 0)
-            {
-                var (curPath, rel) = stack.Pop();
-                if (!visited.Add(curPath)) continue; // 이미 방문한 경로 스킵 (정션/심링크 순환 방지)
-                string[] entries;
-                try { entries = Directory.GetFileSystemEntries(curPath); } catch { continue; }
-                foreach (var entry in entries)
-                {
-                    var name = Path.GetFileName(entry);
-                    if (string.IsNullOrEmpty(name) || name.StartsWith(".")) continue;
-                    if (Directory.Exists(entry))
-                    {
-                        emit(rel, name, true, 0, "");
-                        stack.Push((entry, rel.Length == 0 ? name : rel + "/" + name));
-                    }
-                    else
-                    {
-                        long size = 0; string mtime = "";
-                        try { var fi = new FileInfo(entry); size = fi.Length / 1024; mtime = fi.LastWriteTime.ToString("yyyy-MM-dd"); } catch { }
-                        emit(rel, name, false, Math.Max(1, size), mtime);
-                    }
-                }
-            }
-        }
+        private int WalkDirStream(string dirPath, Action<string,string,bool,long,string> emit, CancellationToken token)
+            => FileScanner.Scan(dirPath,emit,token);
 
         // Mac 드라이브(APFS/HFS+): 트리 미빌드 스트리밍.
         // 반환값 = (사용 MB, 총 MB). 총 MB는 사용 MB와 같은 헤더·같은 정밀도로 계산해
         // "사용 > 총" 역전(여유 음수·100%+ 초과)을 방지한다. APFS는 총 MB 미보유 → 0 반환(JS가 meta.cap 폴백).
-        private (long usedMB, long totalMB) WalkMacDriveStream(string macPath, Action<string, string, bool, long, string> emit)
+        private (long usedMB, long totalMB) WalkMacDriveStream(string macPath, Action<string, string, bool, long, string> emit, CancellationToken token, string? expectedId)
         {
             var inner = macPath.Replace("macvol://", "");
             var slashIdx = inner.IndexOf('/');
@@ -426,16 +268,19 @@ namespace LogMapping
             {
                 if (!ApfsReader.Detect(physStream, partOffset))
                     throw new Exception("APFS 또는 HFS+ 파티션을 인식할 수 없습니다.");
-                using var apfs = new ApfsReader(physStream, partOffset);
+                using var apfs = new ApfsReader(physStream, partOffset, token);
                 var volumes = apfs.FindVolumes();
-                if (volIndex >= volumes.Count) volIndex = 0;
+                if (volIndex >= volumes.Count) throw new IOException("저장된 APFS 볼륨을 찾지 못했습니다.");
                 if (volumes.Count == 0) throw new Exception("APFS 볼륨을 찾을 수 없습니다.");
-                var vol = volumes[volIndex];
+                var vol = !string.IsNullOrEmpty(expectedId) ? volumes.FirstOrDefault(v=>v.VolumeId==expectedId)
+                    ?? throw new IOException("APFS 볼륨 식별자가 다릅니다. 기존 목록은 보존했습니다.") : volumes[volIndex];
                 if (vol.OmapPhys == 0) throw new Exception("암호화된 볼륨은 파일 목록을 읽을 수 없습니다.");
                 apfs.WalkVolumeStream(vol.OmapPhys, vol.RootTreeOid, emit);
-                return ((long)vol.UsedMB, 0L);
+                return ((long)vol.UsedMB, apfs.TotalMB);
             }
 
+            if(!string.IsNullOrEmpty(expectedId) && ReadHfsIdentity(physStream,partOffset)!=expectedId)
+                throw new IOException("HFS+ 볼륨 식별자가 다릅니다. 기존 목록은 보존했습니다.");
             var hfsStream = new OffsetStream(physStream, partOffset, long.MaxValue / 2);
             hfsStream.Position = 1024;
             var magic = new byte[2];
@@ -466,17 +311,18 @@ namespace LogMapping
             stack.Push((@"\", ""));
             while (stack.Count > 0)
             {
+                token.ThrowIfCancellationRequested();
                 var (curPath, rel) = stack.Pop();
                 if (!visited.Add(curPath)) continue; // 하드링크 순환 방지
                 string[] entries;
-                try { entries = hfs.GetFileSystemEntries(curPath); } catch { continue; }
+                entries = hfs.GetFileSystemEntries(curPath);
                 // 폴더 목록을 1회 조회로 받아 entry별 DirectoryExists(B-트리 재탐색) 호출 제거
                 var dirSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                try { foreach (var d in hfs.GetDirectories(curPath)) dirSet.Add(d); } catch { }
+                foreach (var d in hfs.GetDirectories(curPath)) dirSet.Add(d);
                 foreach (var entry in entries)
                 {
                     var name = entry.Replace('/', '\\').TrimEnd('\\').Split('\\').LastOrDefault() ?? "";
-                    if (string.IsNullOrEmpty(name) || name.StartsWith(".")) continue;
+                    if (string.IsNullOrEmpty(name) || name=="." || name=="..") continue;
                     try
                     {
                         if (dirSet.Contains(entry))
@@ -487,71 +333,17 @@ namespace LogMapping
                         else
                         {
                             long size = 0; string mtime = "";
-                            try { size = hfs.GetFileLength(entry) / 1024; } catch { }
-                            try { mtime = hfs.GetLastWriteTime(entry).ToString("yyyy-MM-dd"); } catch { }
+                            size = hfs.GetFileLength(entry) / 1024;
+                            mtime = hfs.GetLastWriteTime(entry).ToString("yyyy-MM-dd");
                             emit(rel, name, false, Math.Max(1, size), mtime);
                         }
                     }
-                    catch { }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { throw new IOException("HFS+ 항목을 읽지 못했습니다: "+entry,ex); }
                 }
             }
+            token.ThrowIfCancellationRequested();
             return (hfsUsedMB, hfsTotalMB);
-        }
-
-        private static void CountTree(List<object> tree, ref int fileCount, Action<int> onProgress)
-        {
-            foreach (var node in tree)
-            {
-                var type = node.GetType().GetProperty("type")?.GetValue(node) as string;
-                if (type == "file")
-                {
-                    fileCount++;
-                    onProgress(fileCount);
-                }
-                else if (type == "dir")
-                {
-                    var children = node.GetType().GetProperty("children")?.GetValue(node) as List<object>;
-                    if (children != null) CountTree(children, ref fileCount, onProgress);
-                }
-            }
-        }
-
-        private List<object> WalkDir(string dirPath, ref int fileCount, Action<int> onProgress)
-        {
-            // 재귀 대신 명시적 스택 사용 — 깊은 디렉토리에서 StackOverflowException 방지
-            var rootResult = new List<object>();
-            var stack = new Stack<(string Path, List<object> Parent)>();
-            stack.Push((dirPath, rootResult));
-
-            while (stack.Count > 0)
-            {
-                var (curPath, parentList) = stack.Pop();
-                string[] entries;
-                try { entries = Directory.GetFileSystemEntries(curPath); }
-                catch { continue; }
-
-                foreach (var entry in entries)
-                {
-                    var name = Path.GetFileName(entry);
-                    if (string.IsNullOrEmpty(name) || name.StartsWith(".")) continue;
-
-                    if (Directory.Exists(entry))
-                    {
-                        var children = new List<object>();
-                        parentList.Add(new { type = "dir", name, children });
-                        stack.Push((entry, children));
-                    }
-                    else
-                    {
-                        fileCount++;
-                        onProgress(fileCount);
-                        var size = 0L; var mtime = "";
-                        try { var fi = new FileInfo(entry); size = fi.Length / 1024; mtime = fi.LastWriteTime.ToString("yyyy-MM-dd"); } catch { }
-                        parentList.Add(new { type = "file", name, size = Math.Max(1, size), mtime });
-                    }
-                }
-            }
-            return rootResult;
         }
 
         private void HandleOpenFileDialog(WebMessage msg)
@@ -574,11 +366,16 @@ namespace LogMapping
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
+                var fileName = msg.FileName ?? "my_drives.hcat";
+                var extension = System.IO.Path.GetExtension(fileName).ToLowerInvariant();
                 var dlg = new Microsoft.Win32.SaveFileDialog
                 {
-                    Filter = "HCat 파일 (*.hcat)|*.hcat",
-                    Title = "카탈로그 저장",
-                    FileName = msg.FileName ?? "my_drives.hcat"
+                    Filter = extension == ".csv" ? "CSV 파일 (*.csv)|*.csv" :
+                             extension == ".html" ? "HTML 뷰어 (*.html)|*.html" : "HCat 파일 (*.hcat)|*.hcat",
+                    DefaultExt = extension,
+                    AddExtension = true,
+                    Title = extension == ".hcat" ? "카탈로그 저장" : "내보내기 저장",
+                    FileName = fileName
                 };
                 if (dlg.ShowDialog() == true)
                     SendToJS("saveFileDialogResult", new { id = msg.Id, path = dlg.FileName, cancelled = false });
@@ -626,8 +423,8 @@ namespace LogMapping
                         {
                             path = d.RootDirectory.FullName,
                             label = d.Name.TrimEnd('\\') + " - " + (string.IsNullOrEmpty(d.VolumeLabel) ? "드라이브" : d.VolumeLabel),
-                            totalGB = (int)(d.TotalSize / 1024 / 1024 / 1024),
-                            freeGB = (int)(d.AvailableFreeSpace / 1024 / 1024 / 1024),
+                            totalGB = d.TotalSize / 1073741824.0,
+                            freeGB = d.TotalFreeSpace / 1073741824.0,
                             driveType = d.DriveType.ToString(),
                             isMac = false,
                             fsType = (string?)null,
@@ -639,6 +436,10 @@ namespace LogMapping
             }
             catch { }
 
+            if(msg.IncludeMac)
+            {
+                Task.Run(()=> { drives.AddRange(FindMacPartitions());SendToJS("listDrivesResult",new{id=msg.Id,drives=drives.ToArray()}); });return;
+            }
             SendToJS("listDrivesResult", new { id = msg.Id, drives = drives.ToArray() });
 
             // 2) Mac 파티션은 백그라운드 스캔 후 별도 푸시
@@ -658,102 +459,54 @@ namespace LogMapping
         // Apple APFS : 7C3457EF-0000-11AA-AA11-00306543ECAC
         // Apple HFS+ : 48465300-0000-11AA-AA11-00306543ECAC
         // macvol 경로 형식: macvol://d{diskNum}o{offsetBytes}/{volIndex}
+        private static string? ReadHfsIdentity(Stream stream,long offset)
+        {
+            stream.Position=offset+1024;var header=new byte[512];stream.ReadExactly(header);
+            if(header[0]!=0x48 || (header[1]!=0x2B && header[1]!=0x58))return null;
+            // Apple TN1150: finderInfo[6..7], bytes 104..111 of volume header.
+            var bytes=header.AsSpan(104,8).ToArray();return bytes.Any(b=>b!=0)?"HFS-"+Convert.ToHexString(bytes):null;
+        }
         private IEnumerable<object> FindMacPartitions()
         {
-            var result = new List<object>();
+            var result=new List<object>();
             try
             {
-                // 물리 디스크 크기를 DiskNumber → 실제 크기(GB)로 미리 수집
-                var diskSizeGB = new Dictionary<int, int>();
-                try
+                var scope=new ManagementScope(@"\\.\Root\Microsoft\Windows\Storage");scope.Connect();
+                using var searcher=new ManagementObjectSearcher(scope,new ObjectQuery("SELECT DiskNumber,Offset,Size,GptType FROM MSFT_Partition"));
+                foreach(ManagementObject p in searcher.Get().Cast<ManagementObject>())
                 {
-                    var diskScope = new ManagementScope(@"\\.\Root\Microsoft\Windows\Storage");
-                    diskScope.Connect();
-                    using var diskSearcher = new ManagementObjectSearcher(
-                        diskScope,
-                        new ObjectQuery("SELECT Number, Size FROM MSFT_Disk"));
-                    foreach (ManagementObject d in diskSearcher.Get().Cast<ManagementObject>())
-                    {
-                        var num  = Convert.ToInt32(d["Number"]);
-                        var size = Convert.ToInt64(d["Size"] ?? 0L);
-                        diskSizeGB[num] = (int)(size / 1024 / 1024 / 1024);
-                    }
-                }
-                catch { }
-
-                var scope = new ManagementScope(@"\\.\Root\Microsoft\Windows\Storage");
-                scope.Connect();
-                using var searcher = new ManagementObjectSearcher(
-                    scope,
-                    new ObjectQuery("SELECT DiskNumber, PartitionNumber, Offset, Size, GptType FROM MSFT_Partition"));
-
-                var seen = new HashSet<int>(); // 같은 디스크에서 APFS 파티션이 여러 개일 때 중복 방지
-                foreach (ManagementObject p in searcher.Get().Cast<ManagementObject>())
-                {
-                    var gptType = (p["GptType"]?.ToString() ?? "").Trim('{', '}');
-                    string fsType;
-                    if (gptType.Equals("7C3457EF-0000-11AA-AA11-00306543ECAC", StringComparison.OrdinalIgnoreCase))
-                        fsType = "APFS";
-                    else if (gptType.Equals("48465300-0000-11AA-AA11-00306543ECAC", StringComparison.OrdinalIgnoreCase))
-                        fsType = "HFS+";
-                    else
-                        continue;
-
-                    var diskNum    = Convert.ToInt32(p["DiskNumber"]);
-                    var partOffset = Convert.ToInt64(p["Offset"] ?? 0L);
-
-                    // APFS 슈퍼블록 / HFS+ 볼륨 헤더에서 실제 볼륨 크기 읽기 (WMI 물리 디스크 크기는 신뢰 불가)
-                    int totalGB = 0;
-                    int freeGB  = 0;
+                    var type=(p["GptType"]?.ToString()??"").Trim('{','}');
+                    bool isApfs=type.Equals("7C3457EF-0000-11AA-AA11-00306543ECAC",StringComparison.OrdinalIgnoreCase);
+                    if(!isApfs && !type.Equals("48465300-0000-11AA-AA11-00306543ECAC",StringComparison.OrdinalIgnoreCase))continue;
+                    int disk=Convert.ToInt32(p["DiskNumber"]);long offset=Convert.ToInt64(p["Offset"]??0L);
                     try
                     {
-                        using var physStream = new FileStream(
-                            $@"\\.\PhysicalDrive{diskNum}",
-                            FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
-                            bufferSize: 512, useAsync: false);
-                        if (ApfsReader.Detect(physStream, partOffset))
+                        using var stream=OpenPhysicalDrive(disk)??throw new IOException("디스크 접근 실패");
+                        if(isApfs)
                         {
-                            physStream.Position = partOffset + 36;
-                            var hdr = new byte[12];
-                            physStream.Read(hdr, 0, 12);
-                            uint  bsz    = BitConverter.ToUInt32(hdr, 0);       // nx_block_size
-                            ulong nblk   = BitConverter.ToUInt64(hdr, 4);       // nx_block_count
-                            if (bsz >= 512 && bsz <= 65536 && nblk > 0)
-                                totalGB = (int)(nblk * bsz / 1024 / 1024 / 1024);
+                            using var reader=new ApfsReader(stream,offset);var volumes=reader.FindVolumes();
+                            for(int i=0;i<volumes.Count;i++)
+                            {
+                                var v=volumes[i];
+                                result.Add(new{path=$"macvol://d{disk}o{offset}/{i}",label=$"[APFS] {v.Name} (Disk {disk})",
+                                    totalGB=reader.TotalMB/1024.0,freeGB=0.0,driveType="Removable",isMac=true,fsType="APFS",volumeId=v.VolumeId});
+                            }
                         }
                         else
                         {
-                            // HFS+ 볼륨 헤더에서 총/여유 용량 (빅엔디안)
-                            var (bsz, total, free) = ReadHfsPlusHeader(physStream, partOffset);
-                            if (bsz > 0 && total > 0)
-                            {
-                                totalGB = (int)(total * (ulong)bsz / 1024 / 1024 / 1024);
-                                if (total >= free)
-                                    freeGB = (int)(free * (ulong)bsz / 1024 / 1024 / 1024);
-                            }
+                            var (bs,total,free)=ReadHfsPlusHeader(stream,offset);
+                            result.Add(new{path=$"macvol://d{disk}o{offset}/0",label=$"[HFS+] Mac 드라이브 (Disk {disk})",
+                                totalGB=total*bs/1073741824.0,freeGB=free*bs/1073741824.0,driveType="Removable",isMac=true,fsType="HFS+",volumeId=ReadHfsIdentity(stream,offset)});
                         }
                     }
-                    catch { }
-                    if (totalGB == 0)
-                        totalGB = diskSizeGB.TryGetValue(diskNum, out int dGB) ? dGB : 0;
-
-                    string MakeMacVolPath(int vi) => $"macvol://d{diskNum}o{partOffset}/{vi}";
-
-                    result.Add(new
+                    catch(Exception ex)
                     {
-                        path      = MakeMacVolPath(0),
-                        label     = $"[{fsType}] Mac 드라이브 (Disk {diskNum})",
-                        totalGB,
-                        freeGB,
-                        driveType = "Removable",
-                        isMac     = true,
-                        fsType,
-                        volumeId  = (string?)MakeMacVolPath(0)  // Mac은 경로를 식별자로 폴백(현행 유지). 추후 볼륨 UUID로 개선 여지
-                    });
+                        result.Add(new{path=$"macvol://d{disk}o{offset}/0",label=$"Mac 드라이브 (Disk {disk}) — 식별 실패: {ex.Message}",
+                            totalGB=0.0,freeGB=0.0,driveType="Removable",isMac=true,fsType=isApfs?"APFS":"HFS+",volumeId=(string?)null});
+                    }
                 }
             }
             catch { }
-
             return result;
         }
 
@@ -792,6 +545,8 @@ namespace LogMapping
         private CatalogDb? _db;
         private readonly object _dbLock = new();
         private CancellationTokenSource? _scanCts;
+        private Task? _scanTask;
+        private int _activeExports;
         // DB 핸들러들이 여러 백그라운드 스레드에서 동시에 호출하므로, 생성·반환을 모두 락 안에서 처리한다.
         private CatalogDb Db()
         {
@@ -804,27 +559,29 @@ namespace LogMapping
 
         private void HandleDbScan(WebMessage msg)
         {
-            // 이전 스캔이 아직 진행 중이면 먼저 취소
-            _scanCts?.Cancel();
-            _scanCts?.Dispose();
-            _scanCts = new CancellationTokenSource();
-            var cts = _scanCts;
+            if(_scanTask is { IsCompleted:false }) { SendToJS("dbScanResult",new{id=msg.Id,error="다른 스캔이 진행 중입니다."});return; }
+            _scanCts?.Dispose();_scanCts=new CancellationTokenSource();var cts=_scanCts;
 
             var folderPath = msg.Path ?? "";
-            Task.Run(() =>
+            _scanTask = Task.Run(() =>
             {
                 long driveId = -1;
                 try
                 {
                     var db = Db();
+                    void CheckWindowsIdentity() {
+                        if(msg.VolumeId?.StartsWith("VSN-")==true && GetVolumeSerial(System.IO.Path.GetPathRoot(folderPath)??"")!=msg.VolumeId)
+                            throw new IOException("연결된 볼륨 식별자가 다릅니다. 기존 목록은 보존했습니다.");
+                    }
+                    CheckWindowsIdentity();
                     // 경로 기준 삭제 금지: 같은 드라이브 문자(예: E:\)를 다른 하드가 재사용하면
                     // 먼저 스캔한 드라이브의 파일이 통째로 지워지는 버그가 있었음.
-                    // 드라이브 식별·기존분 정리는 JS가 volumeId로 처리(재스캔 시 dbDeleteDrive 호출),
-                    // 정리 누락분(고아)은 로드 시 dbPrune로 청소한다.
+                    // JS가 volumeId로 동일 매체를 확인하고 새 세대에 연결한다.
+                    // 기존 세대는 다른 .hcat의 참조를 위해 보존한다.
                     driveId = db.CreateDrive(folderPath);
 
                     // 스트리밍 스캔: 트리를 메모리에 쌓지 않고 노드를 만들자마자 DB에 INSERT
-                    int pc = 0;
+                    int pc = 0;int excluded=0;
                     long macUsedMB = 0;
                     long macTotalMB = 0;
                     db.InsertStreaming(driveId, dbEmit =>
@@ -833,19 +590,21 @@ namespace LogMapping
                         {
                             cts.Token.ThrowIfCancellationRequested(); // 취소 요청 시 즉시 중단
                             dbEmit(pp, n, isDir, sz, mt);
-                            if (!isDir && (++pc % 10 == 0)) SendToJS("scanProgress", new { id = msg.Id, count = pc });
+                            if (!isDir && (++pc % 500 == 0)) SendToJS("scanProgress", new { id = msg.Id, count = pc });
                         };
-                        if (folderPath.StartsWith("macvol://")) (macUsedMB, macTotalMB) = WalkMacDriveStream(folderPath, emit);
-                        else WalkDirStream(folderPath, emit);
+                        if (folderPath.StartsWith("macvol://")) (macUsedMB, macTotalMB) = WalkMacDriveStream(folderPath, emit, cts.Token,msg.VolumeId);
+                        else excluded=WalkDirStream(folderPath, emit,cts.Token);
                     });
 
+                    cts.Token.ThrowIfCancellationRequested();CheckWindowsIdentity();
+                    if(!folderPath.StartsWith("macvol://") && System.IO.Path.GetFullPath(folderPath).TrimEnd('\\')==System.IO.Path.GetPathRoot(folderPath)?.TrimEnd('\\'))
+                    { var info=new DriveInfo(folderPath);macTotalMB=info.TotalSize/1048576;macUsedMB=(info.TotalSize-info.TotalFreeSpace)/1048576; }
                     var statsJson = db.DriveStatsJson(driveId);
                     var rootJson = db.GetChildrenJson(driveId, "");
-                    SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB });
+                    SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB, autoBackupSkipped=db.FileSizeBytes>CatalogDb.AutoBackupMaxBytes, warning=excluded>0?$"시스템 폴더·연결 항목 {excluded}개는 하위 내용을 제외했습니다.":null });
 
-                    // 결과를 먼저 보낸 뒤, 뷰어 내보내기용 캐시를 미리 만들어 둔다.
-                    // (스캔 때 한 번 압축해 두면 나중에 뷰어를 뽑을 때 다시 계산하지 않는다)
-                    try { db.BuildViewerCache(driveId); } catch { }
+                    // 뷰어 캐시는 내보내기에서 필요할 때 생성한다.
+                    // 스캔 성공 이후 압축 작업이 다음 스캔이나 종료를 막지 않게 한다.
                 }
                 catch (OperationCanceledException)
                 {
@@ -853,7 +612,10 @@ namespace LogMapping
                     if (driveId >= 0) try { Db().DeleteDrive(driveId); } catch { }
                     SendToJS("dbScanResult", new { id = msg.Id, error = "cancelled" });
                 }
-                catch (Exception ex) { SendToJS("dbScanResult", new { id = msg.Id, error = ex.Message }); }
+                catch (Exception ex) {
+                    if(driveId>=0)try{Db().DeleteDrive(driveId);}catch{}
+                    SendToJS("dbScanResult",new{id=msg.Id,error="스캔을 완료하지 못했습니다. 기존 목록은 보존했습니다.\n"+ex.Message});
+                }
             });
         }
 
@@ -902,17 +664,8 @@ namespace LogMapping
         {
             Task.Run(() =>
             {
-                try { var rowsJson = Db().SearchJson(msg.Query ?? "", msg.Limit > 0 ? msg.Limit : 500); SendToJS("dbSearchResult", new { id = msg.Id, rowsJson }); }
+                try { var rowsJson = Db().SearchJson(msg.Query ?? "", msg.Limit > 0 ? msg.Limit : 500,msg.DriveIds??Array.Empty<long>(),msg.Color,msg.Extensions,msg.FoldersOnly,msg.Sort); SendToJS("dbSearchResult", new { id = msg.Id, rowsJson }); }
                 catch (Exception ex) { SendToJS("dbSearchResult", new { id = msg.Id, error = ex.Message }); }
-            });
-        }
-
-        private void HandleDbListDrives(WebMessage msg)
-        {
-            Task.Run(() =>
-            {
-                try { var rowsJson = Db().ListDrivesJson(); SendToJS("dbListDrivesResult", new { id = msg.Id, rowsJson }); }
-                catch (Exception ex) { SendToJS("dbListDrivesResult", new { id = msg.Id, error = ex.Message }); }
             });
         }
 
@@ -922,15 +675,6 @@ namespace LogMapping
             {
                 try { Db().SetItemColor(msg.DriveId, msg.Path ?? "", string.IsNullOrEmpty(msg.Color) ? null : msg.Color); SendToJS("dbSetColorResult", new { id = msg.Id, success = true }); }
                 catch (Exception ex) { SendToJS("dbSetColorResult", new { id = msg.Id, success = false, error = ex.Message }); }
-            });
-        }
-
-        private void HandleDbStats(WebMessage msg)
-        {
-            Task.Run(() =>
-            {
-                try { var rowsJson = Db().DriveStatsJson(msg.DriveId); SendToJS("dbStatsResult", new { id = msg.Id, rowsJson }); }
-                catch (Exception ex) { SendToJS("dbStatsResult", new { id = msg.Id, error = ex.Message }); }
             });
         }
 
@@ -947,40 +691,58 @@ namespace LogMapping
         {
             Task.Run(() =>
             {
-                try { var rowsJson = Db().FilesByColorJson(msg.DriveId, msg.Color ?? "", msg.Limit > 0 ? msg.Limit : 1000); SendToJS("dbFilesByColorResult", new { id = msg.Id, rowsJson }); }
+                try { var rowsJson = Db().FilesByColorJson(msg.DriveId, msg.Color ?? "", msg.Limit > 0 ? msg.Limit : 1000,msg.Sort); SendToJS("dbFilesByColorResult", new { id = msg.Id, rowsJson }); }
                 catch (Exception ex) { SendToJS("dbFilesByColorResult", new { id = msg.Id, error = ex.Message }); }
             });
         }
 
+        private void HandleDbDescribe(WebMessage msg) => Task.Run(()=> {
+            try {SendToJS("dbDescribeResult",new{id=msg.Id,description=Db().DescribeJson()});}
+            catch(Exception ex){SendToJS("dbDescribeResult",new{id=msg.Id,error=ex.Message});}
+        });
+        private void HandleDbCopyColors(WebMessage msg) => Task.Run(()=> {
+            try {Db().CopyColors(msg.OldDriveId,msg.DriveId);SendToJS("dbCopyColorsResult",new{id=msg.Id,success=true});}
+            catch(Exception ex){SendToJS("dbCopyColorsResult",new{id=msg.Id,error=ex.Message});}
+        });
         private void HandleDbBackup(WebMessage msg)
         {
-            Task.Run(() =>
-            {
-                try { Db().BackupSelf(); SendToJS("dbBackupResult", new { id = msg.Id, success = true }); }
-                catch (Exception ex) { SendToJS("dbBackupResult", new { id = msg.Id, success = false, error = ex.Message }); }
-            });
-        }
-
-        private void HandleDbExportViewer(WebMessage msg)
-        {
-            Task.Run(() =>
-            {
+            Interlocked.Increment(ref _activeExports);
+            Task.Run(()=> {
+                string? pending=null;
                 try
                 {
-                    var files = Db().ExportViewer(msg.Path ?? "", (done, total) =>
-                        SendToJS("exportProgress", new { id = msg.Id, done, total }));
-                    SendToJS("dbExportViewerResult", new { id = msg.Id, success = true, count = files.Count, files = files.ToArray() });
+                    if(string.IsNullOrEmpty(msg.Content))throw new IOException("백업할 카탈로그 내용이 없습니다.");
+                    using var catalog=JsonDocument.Parse(msg.Content);
+                    var dir=System.IO.Path.Combine(DataDir,"backups");Directory.CreateDirectory(dir);
+                    var name=DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N")[..8];
+                    pending=System.IO.Path.Combine(dir,".pending-"+name);Directory.CreateDirectory(pending);
+                    Db().BackupTo(System.IO.Path.Combine(pending,"catalog.db"));
+                    AtomicStorage.Write(System.IO.Path.Combine(pending,"catalog.hcat"),msg.Content);
+                    var final=System.IO.Path.Combine(dir,name);Directory.Move(pending,final);pending=null;
+                    SendToJS("dbBackupResult",new{id=msg.Id,success=true,path=final});
                 }
-                catch (Exception ex) { SendToJS("dbExportViewerResult", new { id = msg.Id, success = false, error = ex.Message }); }
+                catch(Exception ex){SendToJS("dbBackupResult",new{id=msg.Id,error=ex.Message});}
+                finally{Interlocked.Decrement(ref _activeExports);}
             });
         }
-
-        private void HandleDbExportCsv(WebMessage msg)
+        private void HandleDbExportViewer(WebMessage msg) => RunExport(msg,true);
+        private void HandleDbExportCsv(WebMessage msg) => RunExport(msg,false);
+        private void RunExport(WebMessage msg,bool viewer)
         {
-            Task.Run(() =>
-            {
-                try { Db().ExportCsv(msg.Path ?? ""); SendToJS("dbExportCsvResult", new { id = msg.Id, success = true }); }
-                catch (Exception ex) { SendToJS("dbExportCsvResult", new { id = msg.Id, success = false, error = ex.Message }); }
+            Interlocked.Increment(ref _activeExports);
+            Task.Run(()=> {
+                string? temp=null;
+                var type=viewer?"dbExportViewerResult":"dbExportCsvResult";
+                try
+                {
+                    var path=System.IO.Path.GetFullPath(msg.Path??"");temp=path+".tmp-"+Guid.NewGuid().ToString("N");
+                    if(viewer)Db().ExportViewer(temp,msg.DriveIds??Array.Empty<long>(),(done,total)=>SendToJS("exportProgress",new{id=msg.Id,done,total}));
+                    else Db().ExportCsv(temp,msg.DriveIds??Array.Empty<long>());
+                    File.Move(temp,path,true);temp=null;
+                    SendToJS(type,new{id=msg.Id,success=true,count=1});
+                }
+                catch(Exception ex){SendToJS(type,new{id=msg.Id,error=ex.Message});}
+                finally{if(temp!=null && File.Exists(temp))try{File.Delete(temp);}catch{} Interlocked.Decrement(ref _activeExports);}
             });
         }
 
@@ -988,7 +750,7 @@ namespace LogMapping
         {
             Task.Run(() =>
             {
-                try { var rowsJson = Db().FilesByExtsJson(msg.DriveId, msg.Query ?? "", msg.Limit > 0 ? msg.Limit : 5000); SendToJS("dbByExtsResult", new { id = msg.Id, rowsJson }); }
+                try { var rowsJson = Db().FilesByExtsJson(msg.DriveId, msg.Query ?? "", msg.Limit > 0 ? msg.Limit : 5000,msg.Sort); SendToJS("dbByExtsResult", new { id = msg.Id, rowsJson }); }
                 catch (Exception ex) { SendToJS("dbByExtsResult", new { id = msg.Id, error = ex.Message }); }
             });
         }
@@ -997,7 +759,7 @@ namespace LogMapping
         {
             Task.Run(() =>
             {
-                try { var rowsJson = Db().FoldersByDriveJson(msg.DriveId, msg.Limit > 0 ? msg.Limit : 50000); SendToJS("dbFoldersResult", new { id = msg.Id, rowsJson }); }
+                try { var rowsJson = Db().FoldersByDriveJson(msg.DriveId, msg.Limit > 0 ? msg.Limit : 50000,msg.Sort); SendToJS("dbFoldersResult", new { id = msg.Id, rowsJson }); }
                 catch (Exception ex) { SendToJS("dbFoldersResult", new { id = msg.Id, error = ex.Message }); }
             });
         }
@@ -1027,13 +789,32 @@ namespace LogMapping
             });
         }
 
-        private void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+        private bool _allowClose,_closing;
+        private TaskCompletionSource<bool>? _closeReady;
+        private async void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
         {
-            SendToJS("windowClosing", new { });
-            // DEF-006: 백업은 매 저장이 아니라 종료 시 1회, 변경이 있었을 때만 수행
-            try { _db?.BackupIfDirty(); } catch { }
-            // WAL 체크포인트 + 연결 정상 종료 (손상 예방)
-            try { _db?.Dispose(); _db = null; } catch { }
+            if(_allowClose)return;
+            if(webView.CoreWebView2==null && _db==null)return;
+            e.Cancel=true;if(_closing)return;
+            if(Volatile.Read(ref _activeExports)>0){MessageBox.Show("내보내기 또는 백업이 끝난 뒤 종료해 주세요.");return;}
+            _closing=true;
+            try
+            {
+                if(_scanTask is {IsCompleted:false})
+                {
+                    if(MessageBox.Show("진행 중인 스캔을 취소하고 저장 후 종료할까요?","LogMapping",MessageBoxButton.YesNo)!=MessageBoxResult.Yes)return;
+                    _scanCts?.Cancel();await _scanTask;
+                }
+                _closeReady=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                SendToJS("windowClosing",new{});
+                var completed=await Task.WhenAny(_closeReady.Task,Task.Delay(30000));
+                if(completed!=_closeReady.Task || !await _closeReady.Task)
+                {MessageBox.Show("저장을 완료하지 못해 종료하지 않았습니다. 오류를 확인하고 다시 저장해 주세요.");return;}
+                await Task.Run(()=> { _db?.BackupIfDirty(); _db?.Dispose(); });
+                _db=null;_allowClose=true;Close();
+            }
+            catch(Exception ex){MessageBox.Show("종료 준비 실패: "+ex.Message);}
+            finally{_closing=false;if(!_allowClose)SendToJS("windowCloseAborted",new{});}
         }
     }
 
@@ -1050,6 +831,13 @@ namespace LogMapping
         public string? Query { get; set; }
         public string? Color { get; set; }
         public int Limit { get; set; }
+        public long[]? DriveIds { get; set; }
+        public long OldDriveId { get; set; }
+        public string? Extensions { get; set; }
+        public string? Sort { get; set; }
+        public string? VolumeId { get; set; }
+        public bool FoldersOnly { get; set; }
+        public bool IncludeMac { get; set; }
         public JsonElement? Meta { get; set; }
     }
 
