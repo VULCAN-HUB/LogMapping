@@ -407,7 +407,7 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
       <div class="about-row"><span class="about-lbl">프로젝트</span><span class="about-val"><span>PROJECT 01</span></span></div>
       <div class="about-row"><span class="about-lbl">제작</span><span class="about-val">Unknown</span></div>
       <div class="about-row"><span class="about-lbl">연도</span><span class="about-val">2026</span></div>
-      <div class="about-row"><span class="about-lbl">버전</span><span class="about-val"><span>BETA Ver-0.2.3</span></span></div>
+      <div class="about-row"><span class="about-lbl">버전</span><span class="about-val"><span>BETA Ver-0.2.4</span></span></div>
       <div class="about-row"><span class="about-lbl">엔진</span><span class="about-val">WebView2 · WPF · .NET 8</span></div>
       <div class="about-row"><span class="about-lbl">플랫폼</span><span class="about-val">Windows 10/11  64-bit</span></div>
       <div class="about-row"><span class="about-lbl">유튜브</span><span class="about-val"><a class="about-yt" onclick="callNative('openUrl',{path:'https://www.youtube.com/@unknown8563'})">@unknown8563</a></span></div>
@@ -1497,18 +1497,21 @@ document.addEventListener('keydown',function(e){
   };
 });
 window.addEventListener('unhandledrejection',function(e){e.preventDefault();showErrDetail(e.reason&&e.reason.message||String(e.reason));});
-function enhanceAccessibility(){
-  document.querySelectorAll('[onclick],.drive-item,.tree-item,[data-key],#tree-ctx-menu>div').forEach(function(e){
+// root 생략 = 문서 전체(최초 1회). 이후엔 새로 붙은 노드만 넘겨 가상 스크롤 때 문서 전수 조회를 피한다
+function enhanceAccessibility(root){
+  root=root||document;
+  function each(sel,fn){if(root.matches&&root.matches(sel))fn(root);root.querySelectorAll(sel).forEach(fn);}
+  each('[onclick],.drive-item,.tree-item,[data-key],#tree-ctx-menu>div',function(e){
     if(/^(BUTTON|INPUT|SELECT|TEXTAREA|A)$/.test(e.tagName)||(!e.onclick&&!e.hasAttribute('onclick')&&!e.classList.contains('tree-item')&&!e.classList.contains('drive-item')))return;
     if(!e.hasAttribute('tabindex'))e.tabIndex=0;
     if(!e.hasAttribute('role'))e.setAttribute('role','button');
   });
-  document.querySelectorAll('.modal label').forEach(function(label){
+  each('.modal label',function(label){
     var next=label.nextElementSibling;if(!next)return;
     var input=next.matches('input,select,textarea')?next:next.querySelector('input,select,textarea');
     if(input&&input.id)label.htmlFor=input.id;
   });
-  document.querySelectorAll('.color-dot').forEach(function(e){e.setAttribute('aria-label','드라이브 색상 '+e.id.replace('cc-',''));});
+  each('.color-dot',function(e){e.setAttribute('aria-label','드라이브 색상 '+e.id.replace('cc-',''));});
 }
 var _dialog=null,_returnFocus=null;
 function updateDialogFocus(){
@@ -1527,7 +1530,14 @@ document.addEventListener('keydown',function(e){
   if((e.key==='Enter'||e.key===' ')&&e.target.getAttribute('role')==='button'&&!/^(BUTTON|INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)){e.preventDefault();e.target.click();}
 });
 if(typeof MutationObserver!=='undefined'){
-  var a11yObserver=new MutationObserver(function(){enhanceAccessibility();updateDialogFocus();});
+  var a11yObserver=new MutationObserver(function(muts){
+    var dialogChanged=false;
+    muts.forEach(function(m){
+      if(m.type==='attributes'){if(m.target.matches&&m.target.matches('.modal-overlay,.about-overlay'))dialogChanged=true;}
+      else m.addedNodes.forEach(function(n){if(n.nodeType===1)enhanceAccessibility(n);});
+    });
+    if(dialogChanged)updateDialogFocus();
+  });
   a11yObserver.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});enhanceAccessibility();
 }
 setTimeout(init,0);

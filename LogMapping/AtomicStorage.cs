@@ -15,6 +15,6 @@ internal static class AtomicStorage
             if(File.Exists(path))File.Replace(temp,path,path+".bak");
             else File.Move(temp,path);
         }
-        finally { if(File.Exists(temp))File.Delete(temp); }
+        finally { try { if(File.Exists(temp))File.Delete(temp); } catch { } } // 정리 실패가 원래 저장 오류를 덮지 않게
     }
 }

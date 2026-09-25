@@ -2,7 +2,9 @@
 namespace LogMapping;
 internal static class FileScanner
 {
-    // Intentional exclusions only. An unreadable ordinary directory makes the scan fail.
+    // Intentional exclusions, plus items that vanish between listing and stat (temp files, AV quarantine) -
+    // both counted in the returned number. An unreadable ordinary directory still makes the scan fail,
+    // and a root that disappears (drive unplugged) fails the whole scan instead of saving a partial list.
     public static int Scan(string root,Action<string,string,bool,long,string> emit,CancellationToken token)
     {
         root=Path.GetFullPath(root);
@@ -13,11 +15,17 @@ internal static class FileScanner
         {
             token.ThrowIfCancellationRequested();
             var (path,relative)=stack.Pop();
-            foreach(var entry in Directory.EnumerateFileSystemEntries(path))
+            IEnumerable<string> entries;
+            try{entries=Directory.EnumerateFileSystemEntries(path);}
+            catch(DirectoryNotFoundException) when(relative.Length>0 && Directory.Exists(root)){excluded++;continue;}
+            foreach(var entry in entries)
             {
                 token.ThrowIfCancellationRequested();var name=Path.GetFileName(entry);
                 if(relative.Length==0 && (name.Equals("System Volume Information",StringComparison.OrdinalIgnoreCase)||name.Equals("$RECYCLE.BIN",StringComparison.OrdinalIgnoreCase))) {excluded++;continue;}
-                var attributes=File.GetAttributes(entry);bool directory=attributes.HasFlag(FileAttributes.Directory);
+                FileAttributes attributes;
+                try{attributes=File.GetAttributes(entry);}
+                catch(Exception e) when(e is FileNotFoundException or DirectoryNotFoundException){excluded++;continue;}
+                bool directory=attributes.HasFlag(FileAttributes.Directory);
                 bool link=attributes.HasFlag(FileAttributes.ReparsePoint);
                 if(directory)
                 {
@@ -28,11 +36,14 @@ internal static class FileScanner
                 else
                 {
                     if(link){excluded++;continue;}
-                    var f=new FileInfo(entry);long bytes=f.Length;
+                    var f=new FileInfo(entry);long bytes;
+                    try{bytes=f.Length;}catch(FileNotFoundException){excluded++;continue;}
                     emit(relative,name,false,bytes==0?0:Math.Max(1,bytes/1024),f.LastWriteTime.ToString("yyyy-MM-dd"));
                 }
             }
         }
-        token.ThrowIfCancellationRequested();return excluded;
+        token.ThrowIfCancellationRequested();
+        if(!Directory.Exists(root))throw new DirectoryNotFoundException("스캔 중 경로가 사라졌습니다(연결 해제?): "+root);
+        return excluded;
     }
 }

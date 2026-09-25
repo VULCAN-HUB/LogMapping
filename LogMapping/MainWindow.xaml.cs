@@ -270,10 +270,11 @@ namespace LogMapping
                     throw new Exception("APFS 또는 HFS+ 파티션을 인식할 수 없습니다.");
                 using var apfs = new ApfsReader(physStream, partOffset, token);
                 var volumes = apfs.FindVolumes();
-                if (volIndex >= volumes.Count) throw new IOException("저장된 APFS 볼륨을 찾지 못했습니다.");
                 if (volumes.Count == 0) throw new Exception("APFS 볼륨을 찾을 수 없습니다.");
+                // 저장된 UUID가 있으면 그것이 기준. 볼륨 번호는 컨테이너 구성이 바뀌면 어긋나므로 UUID가 없을 때만 쓴다
                 var vol = !string.IsNullOrEmpty(expectedId) ? volumes.FirstOrDefault(v=>v.VolumeId==expectedId)
-                    ?? throw new IOException("APFS 볼륨 식별자가 다릅니다. 기존 목록은 보존했습니다.") : volumes[volIndex];
+                    ?? throw new IOException("APFS 볼륨 식별자가 다릅니다. 기존 목록은 보존했습니다.")
+                    : volIndex < volumes.Count ? volumes[volIndex] : throw new IOException("저장된 APFS 볼륨을 찾지 못했습니다.");
                 if (vol.OmapPhys == 0) throw new Exception("암호화된 볼륨은 파일 목록을 읽을 수 없습니다.");
                 apfs.WalkVolumeStream(vol.OmapPhys, vol.RootTreeOid, emit);
                 return ((long)vol.UsedMB, apfs.TotalMB);
@@ -560,7 +561,7 @@ namespace LogMapping
         private void HandleDbScan(WebMessage msg)
         {
             if(_scanTask is { IsCompleted:false }) { SendToJS("dbScanResult",new{id=msg.Id,error="다른 스캔이 진행 중입니다."});return; }
-            _scanCts?.Dispose();_scanCts=new CancellationTokenSource();var cts=_scanCts;
+            _scanCts=new CancellationTokenSource();var cts=_scanCts; // 이전 CTS는 Dispose하지 않는다: 취소 요청과 경합 시 ObjectDisposedException
 
             var folderPath = msg.Path ?? "";
             _scanTask = Task.Run(() =>
@@ -601,7 +602,7 @@ namespace LogMapping
                     { var info=new DriveInfo(folderPath);macTotalMB=info.TotalSize/1048576;macUsedMB=(info.TotalSize-info.TotalFreeSpace)/1048576; }
                     var statsJson = db.DriveStatsJson(driveId);
                     var rootJson = db.GetChildrenJson(driveId, "");
-                    SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB, autoBackupSkipped=db.FileSizeBytes>CatalogDb.AutoBackupMaxBytes, warning=excluded>0?$"시스템 폴더·연결 항목 {excluded}개는 하위 내용을 제외했습니다.":null });
+                    SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB, autoBackupSkipped=db.FileSizeBytes>CatalogDb.AutoBackupMaxBytes, warning=excluded>0?$"시스템 폴더·연결 항목·스캔 중 사라진 항목 {excluded}개는 제외했습니다.":null });
 
                     // 뷰어 캐시는 내보내기에서 필요할 때 생성한다.
                     // 스캔 성공 이후 압축 작업이 다음 스캔이나 종료를 막지 않게 한다.
@@ -810,7 +811,10 @@ namespace LogMapping
                 var completed=await Task.WhenAny(_closeReady.Task,Task.Delay(30000));
                 if(completed!=_closeReady.Task || !await _closeReady.Task)
                 {MessageBox.Show("저장을 완료하지 못해 종료하지 않았습니다. 오류를 확인하고 다시 저장해 주세요.");return;}
-                await Task.Run(()=> { _db?.BackupIfDirty(); _db?.Dispose(); });
+                // 백업 실패가 종료를 막으면 창을 영영 닫을 수 없다 → 알리고 선택하게 한 뒤 Dispose는 항상 수행
+                var backupError=await Task.Run(()=> { try{_db?.BackupIfDirty();return null;}catch(Exception ex){return ex.Message;} });
+                if(backupError!=null && MessageBox.Show("자동 백업에 실패했습니다: "+backupError+"\n카탈로그는 이미 저장됐습니다. 백업 없이 종료할까요?","LogMapping",MessageBoxButton.YesNo)!=MessageBoxResult.Yes)return;
+                await Task.Run(()=> _db?.Dispose());
                 _db=null;_allowClose=true;Close();
             }
             catch(Exception ex){MessageBox.Show("종료 준비 실패: "+ex.Message);}
