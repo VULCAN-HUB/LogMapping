@@ -25,6 +25,11 @@ using(var db=new CatalogDb(dbPath))
  Check("rescan retains old generation and copies colors",()=>{var n=Drive(db,3,"E:\\");db.InsertStreaming(n,e=>e("","small.JPG",false,2,""));db.CopyColors(a,n);Assert(Rows(db.FilesByColorJson(n,"#red",20)).GetArrayLength()==1);Assert(Rows(db.DriveStatsJson(a))[0].GetProperty("files").GetInt32()==5);});
  Check("row carries owning drive ID",()=>Assert(Rows(db.GetChildrenJson(a,""))[0].GetProperty("drive_id").GetInt64()==a));
  Check("scoped viewer and newline payload",()=>{db.ExportViewer(System.IO.Path.Combine(root,"viewer.html"),new[]{a});var html=File.ReadAllText(System.IO.Path.Combine(root,"viewer.html"));Assert(!html.Contains("Test 2"));Assert(html.Contains("Object.create(null)"));});
+ Check("viewer payload keeps Hangul raw but escapes script end",()=>{var k=Drive(db,4,"G:\\");db.InsertStreaming(k,e=>{e("","한글폴더",true,0,"");e("한글폴더","</script>x.txt",false,1,"");});
+  var gz=(byte[])typeof(CatalogDb).GetMethod("BuildPayload",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(db,new object[]{k})!;
+  using var ms=new MemoryStream();using(var g=new System.IO.Compression.GZipStream(new MemoryStream(gz),System.IO.Compression.CompressionMode.Decompress))g.CopyTo(ms);var text=Encoding.UTF8.GetString(ms.ToArray());
+  Assert(text.Contains("한글폴더"),"Hangul escaped");Assert(!text.Contains("</script>"),"script end unescaped");
+  foreach(var line in text.Split('\n',StringSplitOptions.RemoveEmptyEntries))JsonSerializer.Deserialize<string>(line[1..]);db.DeleteDrive(k);});
  Check("scoped CSV",()=>{var p=System.IO.Path.Combine(root,"out.csv");db.ExportCsv(p,new[]{b});var text=File.ReadAllText(p);Assert(text.Contains("second.jpg")&&!text.Contains("small.JPG"));});
  Check("backup opens with same database identity",()=>{var info=Rows(db.DescribeJson());var bp=System.IO.Path.Combine(root,"backup.db");db.BackupTo(bp);using var backup=new CatalogDb(bp);Assert(Rows(backup.DescribeJson()).GetProperty("databaseId").GetString()==info.GetProperty("databaseId").GetString());Assert(Rows(backup.DriveStatsJson(a))[0].GetProperty("files").GetInt32()==5);});
 }

@@ -363,12 +363,15 @@ CREATE TABLE IF NOT EXISTS viewer_cache(
                 {
                     if (r.IsDBNull(0)) continue;
                     gw.Write(Convert.ToInt64(r.GetValue(1) ?? 0L) == 1 ? 'D' : 'F');
-                    gw.Write(JsonSerializer.Serialize(r.GetString(0)));
+                    gw.Write(JsonSerializer.Serialize(r.GetString(0), ViewerJson));
                     gw.Write('\n');
                 }
             }
             return ms.ToArray();
         }
+
+        // 한글 등은 그대로 두고(기본 인코더는 \uXXXX로 2배 부풀림) HTML 민감 문자 <>&'"+` 만 이스케이프한다
+        private static readonly JsonSerializerOptions ViewerJson = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All) };
 
         private byte[]? ReadCache(long driveId)
         {
@@ -1026,7 +1029,7 @@ else {
                     SetMeta("last_backup",DateTimeOffset.Now.ToString("o"));
                     _dirtySinceBackup=false;
                 }
-                finally { if(File.Exists(temp))File.Delete(temp); }
+                finally { try { if(File.Exists(temp))File.Delete(temp); } catch { } }
             }
         }
         private void BackupLocked() => BackupTo(Path+".bak");

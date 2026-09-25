@@ -6,7 +6,7 @@
     <AssemblyName>LogMapping</AssemblyName>
     <RootNamespace>LogMapping</RootNamespace>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>0.2.3-beta</Version>
+    <Version>0.2.4-beta</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

@@ -13,8 +13,12 @@ Check("deep Unicode Windows path beyond 260 characters",()=>{
  var deep=Path.Combine(root,"deep");for(int i=0;i<12;i++)deep=Path.Combine(deep,"한글공백 폴더123456789-"+i);Directory.CreateDirectory(deep);File.WriteAllText(Path.Combine(deep,"자료.txt"),"x");
  int files=0;FileScanner.Scan(Path.Combine(root,"deep"),(p,n,d,s,m)=>{if(!d)files++;},default);Assert(files==1);
 });
-Check("directory disappears during scan: explicit failure",()=>{
- var dir=Path.Combine(root,"removed-during-scan");Directory.CreateDirectory(Path.Combine(dir,"child"));bool threw=false;
- try{FileScanner.Scan(dir,(p,n,d,s,m)=>{if(d&&n=="child")Directory.Delete(Path.Combine(dir,n));},default);}catch(DirectoryNotFoundException){threw=true;}Assert(threw);
+Check("subfolder disappears during scan: skipped and counted, rest kept",()=>{
+ var dir=Path.Combine(root,"removed-during-scan");Directory.CreateDirectory(Path.Combine(dir,"child"));File.WriteAllText(Path.Combine(dir,"keep.txt"),"x");int files=0;
+ int skipped=FileScanner.Scan(dir,(p,n,d,s,m)=>{if(d&&n=="child")Directory.Delete(Path.Combine(dir,n));if(!d)files++;},default);Assert(skipped==1&&files==1);
+});
+Check("scan root disappears (unplugged): explicit failure",()=>{
+ var dir=Path.Combine(root,"root-removed");Directory.CreateDirectory(Path.Combine(dir,"child"));bool threw=false;
+ try{FileScanner.Scan(dir,(p,n,d,s,m)=>{if(d&&n=="child")Directory.Delete(dir,true);},default);}catch(DirectoryNotFoundException){threw=true;}Assert(threw);
 });
 Console.WriteLine($"RESULT passed={passed} failed={failed}");return failed==0?0:1;
