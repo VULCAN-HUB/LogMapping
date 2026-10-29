@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
@@ -6,7 +6,12 @@
     <AssemblyName>LogMapping</AssemblyName>
     <RootNamespace>LogMapping</RootNamespace>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>0.2.4-beta</Version>
+    <Version>0.2.5-beta.3</Version>
+    <Product>LogMapping</Product>
+    <Company>Unknown</Company>
+    <Authors>Unknown</Authors>
+    <Copyright>Copyright © 2026 Unknown</Copyright>
+    <Description>Offline drive file catalog</Description>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -23,6 +28,6 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="icon.ico" />
-    <EmbeddedResource Include="resources\index.html" />
+    <EmbeddedResource Include="resources\**\*" />
   </ItemGroup>
 </Project>

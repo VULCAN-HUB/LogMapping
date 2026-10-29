@@ -4,6 +4,28 @@ var root=Path.GetFullPath(args[0]);int passed=0,failed=0;
 void Check(string name,Action a){var sw=Stopwatch.StartNew();try{a();passed++;Console.WriteLine($"PASS {name}: {sw.Elapsed.TotalSeconds:F3}s");}catch(Exception e){failed++;Console.WriteLine("FAIL "+name+": "+e);}}
 void Assert(bool ok){if(!ok)throw new Exception("assertion failed");}
 var tree=Path.Combine(root,"tree");Directory.CreateDirectory(tree);
+Check("directory types remain distinct from 4KB files and metadata companions",()=>{
+ var dir=Path.Combine(root,"types");Directory.CreateDirectory(dir);
+ foreach(var name in new[]{"상위 폴더","project.ext",".hidden"}){
+  Directory.CreateDirectory(Path.Combine(dir,name,"child"));
+  File.WriteAllBytes(Path.Combine(dir,name,"child","file.bin"),new byte[4096]);
+  File.WriteAllBytes(Path.Combine(dir,"._"+name),new byte[4096]);
+ }
+ var rows=new Dictionary<string,(bool folder,long size)>();
+ FileScanner.Scan(dir,(p,n,d,s,m)=>rows[p+"/"+n]=(d,s),default);
+ foreach(var name in new[]{"상위 폴더","project.ext",".hidden"}){
+  Assert(rows["/"+name]==(true,0));Assert(rows[name+"/child"]==(true,0));
+  Assert(rows[name+"/child/file.bin"]==(false,4));Assert(rows["/._"+name]==(false,4));
+ }
+});
+Check("exclusion summary distinguishes system directories from missing entries",()=>{
+ var dir=Path.Combine(root,"excluded");Directory.CreateDirectory(dir);
+ Directory.CreateDirectory(Path.Combine(dir,"System Volume Information"));Directory.CreateDirectory(Path.Combine(dir,"$RECYCLE.BIN"));
+ Directory.CreateDirectory(Path.Combine(dir,"vanish"));var report=new FileScanner.Exclusions();
+ int count=FileScanner.Scan(dir,(p,n,d,s,m)=>{if(d&&n=="vanish")Directory.Delete(Path.Combine(dir,n));},default,report);
+ Assert(count==3&&report.SystemFolders==2&&report.Links==0&&report.Missing==1);
+ Assert(report.Summary!.Contains("시스템 폴더 2개")&&report.Summary.Contains("사라진 항목 1개"));
+});
 Check("scan 30000 physical fixture files with a junction loop",()=>{
  for(int d=0;d<30;d++){var folder=Path.Combine(tree,"사진.2026-"+d);Directory.CreateDirectory(folder);for(int i=0;i<1000;i++)File.WriteAllText(Path.Combine(folder,".사진-"+i+".txt"),i==0?"":"fixture");}
  int files=0,zeros=0;var seen=new HashSet<string>();int skipped=FileScanner.Scan(tree,(p,n,d,s,m)=>{if(!d){files++;Assert(seen.Add(p+"/"+n));if(s==0)zeros++;}},default);

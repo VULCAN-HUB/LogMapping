@@ -1,0 +1,41 @@
+@font-face{font-family:Pretendard;src:url('fonts/Pretendard-Regular.woff2') format('woff2');font-weight:400;font-display:swap}
+@font-face{font-family:Pretendard;src:url('fonts/Pretendard-Bold.woff2') format('woff2');font-weight:700;font-display:swap}
+@font-face{font-family:Rajdhani;src:url('fonts/rajdhani-latin-700-normal.woff2') format('woff2');font-weight:700;font-display:swap}
+:root,button,input,select,textarea{font-family:Pretendard,'Malgun Gothic',sans-serif}
+[hidden]{display:none!important}
+.brand-header{height:44px;min-height:44px;padding:4px 14px;display:flex;align-items:center;gap:10px;background:var(--bg1);border-bottom:1px solid var(--bd2)}
+.brand-wordmark,.about-appname,.logo,.s-logo{font-family:Rajdhani,Pretendard,sans-serif;font-weight:700}
+.brand-wordmark{font-size:29px;line-height:27px;letter-spacing:1px}
+.brand-wordmark span{color:var(--acc)}
+.brand-subtitle{font-size:11px;color:var(--t2);line-height:12px}
+.brand-credit{margin-left:auto;font-size:11px;color:var(--t2)}
+.brand-help{width:24px;height:24px;flex-shrink:0;border-radius:50%;border:1px solid var(--t2);background:transparent;color:var(--t0);cursor:pointer;font-size:14px}
+.brand-help:hover{color:var(--acc);border-color:var(--acc)}
+.about-overlay{padding:12px;z-index:250}
+.about-dialog{width:390px;max-width:100%;max-height:calc(100dvh - 24px);border-radius:15px;display:flex;flex-direction:column}
+.about-header{height:90px;min-height:90px;padding:15px 20px;gap:14px;background:linear-gradient(120deg,#C0390B,#D35400)}
+.about-icon{width:60px;height:60px;object-fit:contain;background:transparent}
+.about-appname{font-size:29px;letter-spacing:1px;line-height:1.1}
+.about-appsub{font-size:11px;letter-spacing:.5px;color:#fff;margin-top:5px}
+.about-scroll{overflow-y:auto;min-height:0;overscroll-behavior:contain}
+.about-body{padding:14px 20px}
+.about-row{gap:0;padding:7px 0}
+.about-lbl{width:70px;font-size:11px}
+.about-val{font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.brand-accent{color:#ed893f;font-weight:700}
+.brand-link{font-size:12px;text-align:left;color:#ed893f;background:transparent;border:0;cursor:pointer;padding:3px 0;line-height:1.5}
+.brand-link:hover{text-decoration:underline}
+.about-description{font-size:12px;line-height:1.6;color:var(--t1);margin:14px 0}
+.about-footer{flex-shrink:0;align-items:center;justify-content:space-between;padding:12px 20px;gap:12px;background:var(--bg1)}
+.about-ok{background:#bd4b00;color:#fff;font-size:12px;min-height:32px}
+.about-ok:hover{background:#D35400}
+.update-panel{padding-top:14px;border-top:1px solid var(--bd2)}
+.update-panel h3,#font-licenses h3{font-size:14px;margin-bottom:10px}
+#update-channel,.update-note{font-size:11px;color:var(--t2);line-height:1.6;margin:8px 0}
+#update-status{font-size:12px;line-height:1.6;margin:10px 0;overflow-wrap:anywhere}
+.update-actions{display:flex;gap:6px;flex-wrap:wrap}
+#update-progress{width:100%;accent-color:#D35400;margin:6px 0}
+#about-error{color:#ff9e8c;font-size:12px;line-height:1.6;padding:0 20px 12px;white-space:pre-wrap}
+#about-error:empty{display:none}
+#font-license-text{font-family:Pretendard,sans-serif;font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:12px}
+@media(max-width:500px){.brand-credit{display:none}.brand-help{margin-left:auto}.brand-wordmark{font-size:25px}.about-header{padding-left:14px;padding-right:14px}.about-appname{font-size:25px}}

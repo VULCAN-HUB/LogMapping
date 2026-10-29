@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8"/>
@@ -191,8 +191,15 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
 .tree-item[tabindex]:focus-visible{outline-offset:-2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
+<link rel="stylesheet" href="about.css"/>
 </head>
 <body>
+<header class="brand-header">
+  <img src="app-icon.ico" width="36" height="36" alt=""/>
+  <div><div class="brand-wordmark">LOG<span>MAPPING</span></div><div class="brand-subtitle">Offline Drive Catalog</div></div>
+  <span class="brand-credit">LogMapping · Unknown</span>
+  <button class="brand-help" onclick="openAbout()" aria-label="LogMapping 정보" title="LogMapping 정보">?</button>
+</header>
 
 <div id="startup">
   <div>
@@ -338,8 +345,8 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
 <!-- 오류 상세 다이얼로그 (복사 가능) -->
 <div class="modal-overlay" id="err-detail-overlay" style="display:none">
   <div class="modal" style="width:520px;max-width:95vw">
-    <h3 style="color:var(--danger)">작업을 완료하지 못했습니다</h3>
-    <p style="font-size:12px;color:var(--t1);margin:6px 0 8px">아래 오류 내용을 복사해서 공유하세요.</p>
+    <h3 id="detail-title" style="color:var(--danger)">작업을 완료하지 못했습니다</h3>
+    <p id="detail-description" style="font-size:12px;color:var(--t1);margin:6px 0 8px">아래 오류 내용을 복사해서 공유하세요.</p>
     <textarea id="err-detail-text" readonly style="width:100%;height:200px;background:var(--bg0);color:var(--t0);border:1px solid var(--bd2);border-radius:6px;padding:8px;font-size:11px;font-family:monospace;resize:vertical;user-select:text"></textarea>
     <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
       <button class="btn" onclick="var t=document.getElementById('err-detail-text');t.select();document.execCommand('copy');this.textContent='✓ 복사됨';setTimeout(()=>this.textContent='클립보드 복사',1500)">클립보드 복사</button>
@@ -387,36 +394,45 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
   <div class="ctx-item" onclick="ctxAction('delete')" style="color:var(--danger)"><span>✕</span>삭제</div>
 </div>
 
-<div class="sig" onclick="document.getElementById('about-overlay').style.display='flex'">
+<div class="sig" onclick="openAbout()">
   <div class="sig-dot"></div>
-  <div class="sig-label">PROJECT 01</div>
+  <div class="sig-label">LogMapping</div>
   <div class="sig-sep">·</div>
   <div class="sig-name">Unknown</div>
 </div>
 
-<div class="about-overlay" id="about-overlay" onclick="if(event.target===this)this.style.display='none'">
-  <div class="about-dialog">
-    <div class="about-header">
-      <div class="about-icon">🗂️</div>
-      <div>
-        <div class="about-appname">LOGMAPPING</div>
-        <div class="about-appsub">File Catalog Manager</div>
+<div class="about-overlay" id="about-overlay" role="dialog" aria-modal="true" aria-label="LogMapping 정보" onclick="if(event.target===this)closeAbout()">
+  <section class="about-dialog">
+    <div class="about-header"><img class="about-icon" src="app-icon.ico" alt=""/><div><div class="about-appname">LOGMAPPING</div><div class="about-appsub">Offline Drive Catalog</div></div></div>
+    <div class="about-scroll">
+      <div id="about-details" class="about-body">
+        <div class="about-row"><span class="about-lbl">프로젝트</span><span class="about-val brand-accent">LogMapping</span></div>
+        <div class="about-row"><span class="about-lbl">제작</span><span class="about-val brand-accent">Unknown</span></div>
+        <div class="about-row"><span class="about-lbl">연도</span><span class="about-val">2026</span></div>
+        <div class="about-row"><span class="about-lbl">버전</span><span class="about-val" id="about-version">실행 정보 확인 중…</span></div>
+        <div class="about-row"><span class="about-lbl">유튜브</span><button class="brand-link" onclick="openBrand('youtube')">@unknown8563 ↗</button></div>
+        <div class="about-row"><span class="about-lbl">디스코드</span><button class="brand-link" onclick="openBrand('discord')">Discord 커뮤니티 참여 ↗</button></div>
+        <div class="about-row"><span class="about-lbl">엔진</span><span class="about-val">.NET 8 · WPF · WebView2 · SQLite</span></div>
+        <div class="about-row"><span class="about-lbl">플랫폼</span><span class="about-val" id="about-platform">확인 중…</span></div>
+        <p class="about-description">연결하지 않은 드라이브의 파일도 한곳에서 찾으세요.</p>
+        <section class="update-panel" aria-labelledby="update-title">
+          <h3 id="update-title">앱 업데이트</h3>
+          <p id="update-channel"></p>
+          <p id="update-status" role="status" aria-live="polite">실행 정보 확인 중…</p>
+          <progress id="update-progress" hidden aria-label="업데이트 다운로드 진행률"></progress>
+          <div class="update-actions"><button class="btn" id="update-check" onclick="updateAction('updateCheck')">업데이트 확인</button><button class="btn" id="update-download" onclick="updateAction('updateDownload')" hidden>업데이트 다운로드</button><button class="btn" id="update-cancel" onclick="updateAction('updateCancel')" hidden>다운로드 취소</button><button class="btn" id="update-apply" onclick="applyUpdate()" hidden>재시작하여 업데이트</button><button class="btn" id="update-open" onclick="openUpdateFolder()" hidden>검증된 파일 위치 열기</button></div>
+          <p class="update-note">Windows x64 포터블 · 적용 전 저장 및 재시작 확인</p>
+          <p class="update-note">재시작 버튼을 누르고 확인하면 저장 후 EXE를 교체합니다. 이전 EXE와 .hcat·data 폴더는 보존합니다. 수동 교체 시에도 기존 실행 위치를 사용하세요.</p>
+          <p class="update-note">SHA-256은 파일 일치 확인이며 전자서명을 대신하지 않습니다.</p>
+        </section>
       </div>
+      <div id="font-licenses" class="about-body" hidden><h3>글꼴 라이선스</h3><pre id="font-license-text">불러오는 중…</pre></div>
+      <p id="about-error" role="alert"></p>
     </div>
-    <div class="about-body">
-      <div class="about-row"><span class="about-lbl">프로젝트</span><span class="about-val"><span>PROJECT 01</span></span></div>
-      <div class="about-row"><span class="about-lbl">제작</span><span class="about-val">Unknown</span></div>
-      <div class="about-row"><span class="about-lbl">연도</span><span class="about-val">2026</span></div>
-      <div class="about-row"><span class="about-lbl">버전</span><span class="about-val"><span>BETA Ver-0.2.4</span></span></div>
-      <div class="about-row"><span class="about-lbl">엔진</span><span class="about-val">WebView2 · WPF · .NET 8</span></div>
-      <div class="about-row"><span class="about-lbl">플랫폼</span><span class="about-val">Windows 10/11  64-bit</span></div>
-      <div class="about-row"><span class="about-lbl">유튜브</span><span class="about-val"><a class="about-yt" onclick="callNative('openUrl',{path:'https://www.youtube.com/@unknown8563'})">@unknown8563</a></span></div>
-    </div>
-    <div class="about-footer">
-      <button class="about-ok" onclick="document.getElementById('about-overlay').style.display='none'">OK</button>
-    </div>
-  </div>
+    <div class="about-footer"><button class="brand-link" id="font-license-button" onclick="showFontLicenses()">글꼴 라이선스</button><button class="about-ok" onclick="closeAbout()">확인</button></div>
+  </section>
 </div>
+<script src="about.js"></script>
 
 <script>
 // ── WEBVIEW2 BRIDGE ───────────────────────────────────────────────────────────
@@ -1188,7 +1204,7 @@ async function rescanDrive(driveId) {
     Object.keys(treeState).forEach(function(k){if(k.indexOf(d.dbId+'|')===0)delete treeState[k];});
     await syncDriveMeta(d);
     renderAll(); switchTab('info'); markDirty(true);
-    await persistCatalog(); showToast('재스캔 완료 — 이전 목록도 DB에 보존했습니다');if(result.warning)showErrDetail(result.warning);
+    await persistCatalog(); showToast('재스캔 완료 — 이전 목록도 DB에 보존했습니다');if(result.warning)showScanSummary(result.warning);
   } catch(e) {
     _scanProgressCb = null;
     alert('재스캔 오류: '+e.message);
@@ -1344,7 +1360,8 @@ function openRename(id){
   document.getElementById('rename-overlay').style.display='flex';
 }
 function closeRename(){document.getElementById('rename-overlay').style.display='none';}
-function showErrDetail(msg){document.getElementById('err-detail-text').value=msg;document.getElementById('err-detail-overlay').style.display='flex';}
+function showScanSummary(msg){showErrDetail(msg,true);}
+function showErrDetail(msg,notice){var title=document.getElementById('detail-title');title.textContent=notice?'스캔 완료 · 제외 내역':'작업을 완료하지 못했습니다';title.style.color=notice?'var(--t0)':'var(--danger)';document.getElementById('detail-description').textContent=notice?'스캔 결과를 저장했습니다. 아래 항목은 제외되었으며 경로가 포함되어 있으니 공유 전 확인하세요.':'아래 오류 내용을 복사해서 공유하세요.';document.getElementById('err-detail-text').value=msg;document.getElementById('err-detail-overlay').style.display='flex';}
 async function applyRename(){
   var d=catalog.drives.find(function(x){return x.id===_renameId;});if(!d)return;
   var newNum=parseInt(document.getElementById('rename-num').value),newName=document.getElementById('rename-name').value.trim();
@@ -1403,7 +1420,7 @@ async function scanFolder(folderPath,meta){
       Object.keys(treeState).forEach(function(k){if(k.indexOf(dbId+'|')===0)delete treeState[k];});
       delete treeCache[ckey(dbId,'')];await syncDriveMeta(existByPath);
       closeModal(); selectDrive(existByPath.id); updateCounts(); markDirty(true);
-      await persistCatalog(); showToast('저장되었습니다');
+      await persistCatalog(); showToast('저장되었습니다');if(result.warning)showScanSummary(result.warning);
       return;
     }
     if(catalog.drives.find(function(d){return d.num===drive.num;})){
@@ -1415,7 +1432,7 @@ async function scanFolder(folderPath,meta){
     catalog.drives.push(drive);catalog.drives.sort(function(a,b){return a.num-b.num;});
     await syncDriveMeta(drive);
     closeModal();selectDrive(drive.id);updateCounts();markDirty(true);
-    await persistCatalog(); showToast('저장되었습니다');if(result.warning)showErrDetail(result.warning);
+    await persistCatalog(); showToast('저장되었습니다');if(result.warning)showScanSummary(result.warning);
   }catch(e){_scanProgressCb=null;showErrDetail(e.message);if(scanBtn){scanBtn.disabled=false;scanBtn.textContent='🔍 스캔 시작';}}
 }
 function cancelScan(){callNative('cancelScan',{},5000).catch(function(){});}

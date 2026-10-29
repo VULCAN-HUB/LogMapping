@@ -44,3 +44,32 @@ dotnet run --project tests/Preflight/Preflight.csproj -c Release -- --migration 
 ```
 
 Migration makes a separate DB copy, constructs a legacy name-only FTS schema and rebuilds the current path index. It requires several additional GB and explicitly verifies 40 drives and 6,400,000 file rows. Its `migration.db` destination must not already exist.
+
+## About and updates
+
+```powershell
+dotnet run --project tests/Updates/Updates.csproj -c Release
+node tests/about_update_ui.cjs
+```
+
+22 backend cases cover semantic versions, channels, metadata, exact package selection, network failures, SHA-256, cancellation, duplicate actions, redirects and tampering. Nine mock UI cases cover states, runtime metadata, licenses, duplicate actions, busy-work handoff guards and retry. These are not real WPF UI or portable replacement tests.
+
+Opt-in network integration test (downloads but never executes the current public EXE using a simulated older version):
+
+```powershell
+dotnet run --project tests/Updates/Updates.csproj -c Release -- --live
+```
+
+PlatformProbe also checks embedded About assets, fonts and both OFL license files byte-for-byte.
+
+Portable process integration uses harmless test executables and sentinel catalog files, never the user's installed executable or catalog. It verifies parent-exit ordering, actual replacement/restart acknowledgment and backup/data preservation:
+
+```powershell
+dotnet publish tests/PortableProcessProbe/PortableProcessProbe.csproj -c Release -o probe-out
+$probeFixture = Join-Path $env:TEMP ("LogMapping-process-" + [guid]::NewGuid())
+./probe-out/PortableProcessProbe.exe --test $probeFixture
+$failureFixture = Join-Path $env:TEMP ("LogMapping-rollback-" + [guid]::NewGuid())
+./probe-out/PortableProcessProbe.exe --test-failure $failureFixture
+```
+
+The failure case rejects the replacement's startup acknowledgment and verifies actual restoration and relaunch of the previous executable, retained candidate, rollback result and unchanged sentinel data. This does not test the real WPF/UAC save-to-restart path. Retain fixtures for inspection; run from a fresh directory.

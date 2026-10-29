@@ -19,3 +19,6 @@ catalog.db.bak
 *.log
 Thumbs.db
 .DS_Store
+
+# Standalone updater test build
+probe-out/

@@ -1,6 +1,8 @@
-﻿using DiscUtils.HfsPlus;
+using DiscUtils.HfsPlus;
 using Microsoft.Web.WebView2.Core;
 using System.IO;
+using System.IO.Pipes;
+using System.Diagnostics;
 using System.Management;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -22,6 +24,8 @@ namespace LogMapping
         public MainWindow()
         {
             InitializeComponent();
+            _updates.Changed += status => SendToJS("updateState", status);
+            Closed += (_, _) => _updates.Dispose();
             InitWebView();
         }
 
@@ -68,12 +72,102 @@ namespace LogMapping
             {
                 var script = "window._APP_DIR=" + JsonSerializer.Serialize(_appDir) + ";window._DATA_DIR=" + JsonSerializer.Serialize(DataDir) + ";if(typeof APP_DIR!=='undefined'){APP_DIR=window._APP_DIR;DATA_DIR=window._DATA_DIR;}";
                 await webView.CoreWebView2.ExecuteScriptAsync(script);
+                if (App.UpdateReadyPipe is string readyPipe)
+                {
+                    App.UpdateReadyPipe = null;
+                    try { await PortableUpdate.SignalReadyAsync(readyPipe); } catch { }
+                }
             };
 
             Closing += OnWindowClosing;
 
             ExtractResources();
             webView.CoreWebView2.Navigate("https://logmapping.app/app/index.html");
+        }
+
+        private readonly AppUpdates _updates = new(AppUpdates.RunningVersion, Path.Combine(_localBase, "updates"));
+
+        private async void HandleUpdateMessage(WebMessage msg)
+        {
+            try
+            {
+                switch (msg.Type)
+                {
+                    case "appInfo":
+                        SendToJS("appInfoResult", new { id = msg.Id, version = AppUpdates.RunningVersion,
+                            platform = "Windows · " + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture,
+                            channel = AppUpdates.RunningVersion.Contains('-') ? "beta" : "stable" });
+                        return;
+                    case "updateCheck": await _updates.CheckAsync(); break;
+                    case "updateDownload": await _updates.DownloadAsync(); break;
+                    case "updateCancel": _updates.Cancel(); break;
+                    case "updateApply": await ApplyUpdateAsync(); break;
+                    case "updateOpenFolder":
+                        if (_closing || _scanTask is { IsCompleted: false } || Volatile.Read(ref _activeExports) > 0)
+                            throw new InvalidOperationException("스캔·내보내기·백업 또는 종료 처리가 끝난 뒤 확인하세요.");
+                        var folder = await _updates.VerifiedFolderAsync();
+                        var start = new System.Diagnostics.ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+                        start.ArgumentList.Add(folder);
+                        System.Diagnostics.Process.Start(start);
+                        break;
+                }
+                SendToJS(msg.Type + "Result", new { id = msg.Id, status = _updates.Status });
+            }
+            catch (Exception) { SendToJS(msg.Type + "Result", new { id = msg.Id, error = "작업을 완료하지 못했습니다. 진행 중 작업과 업데이트 상태를 확인하고 다시 시도하세요." }); }
+        }
+
+        private bool _applyingUpdate;
+        private async Task ApplyUpdateAsync()
+        {
+            if (_closing || _applyingUpdate || _scanTask is { IsCompleted: false } || Volatile.Read(ref _activeExports) > 0)
+                throw new InvalidOperationException("진행 중인 작업이 끝난 뒤 업데이트하세요.");
+            if (_updates.Status.State != "ready") throw new InvalidOperationException("업데이트가 준비되지 않았습니다.");
+            if (MessageBox.Show("변경 내용을 저장하고 LogMapping을 종료한 뒤 새 버전으로 교체하고 다시 실행합니다. 기존 실행 파일은 백업하며 카탈로그 데이터는 유지합니다.\n\n지금 업데이트할까요?", "LogMapping 업데이트", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            _applyingUpdate = true; _closing = true;
+            try
+            {
+                _updates.Installing();
+                string folder = await _updates.VerifiedFolderAsync();
+                var asset = _updates.Candidate;
+                string source = Path.Combine(folder,"LogMapping.exe");
+                var info = FileVersionInfo.GetVersionInfo(source);
+                if(info.ProductName != "LogMapping" || (info.ProductVersion ?? "").Split('+')[0] != asset.Version)
+                    throw new InvalidDataException("실행 파일의 제품·버전이 배포 정보와 다릅니다.");
+                string target = Environment.ProcessPath ?? throw new IOException("실행 위치를 확인할 수 없습니다.");
+                if(File.Exists(Path.Combine(_appDir,"LogMapping.dll"))) throw new NotSupportedException("자동 적용은 자체 포함 단일 EXE 배포에서 지원합니다.");
+                string staging = Path.Combine(_appDir,".logmapping-update-"+Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(staging);
+                string candidate = Path.Combine(staging,"candidate.exe");
+                File.Copy(source,candidate);
+                var plan = new InstallPlan(target,candidate,Path.Combine(_appDir,"LogMapping.previous-"+Guid.NewGuid().ToString("N")+".exe"),PortableUpdate.Hash(target),asset.Sha256);
+                PortableUpdate.Validate(plan);
+                string helper = Path.Combine(staging,"helper.exe");
+                File.Copy(target,helper);
+                if(PortableUpdate.Hash(helper) != plan.OldHash) throw new InvalidDataException("업데이트 도우미 복사 검증 실패");
+                string planFile = Path.Combine(staging,"plan.json");
+                await File.WriteAllTextAsync(planFile,JsonSerializer.Serialize(plan));
+                string pipeName = "LogMapping-update-"+Guid.NewGuid().ToString("N");
+                using var pipe = new NamedPipeServerStream(pipeName,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
+                var launch = new ProcessStartInfo(helper){UseShellExecute=true,WorkingDirectory=staging};
+                launch.ArgumentList.Add("--apply-update");launch.ArgumentList.Add(pipeName);launch.ArgumentList.Add(planFile);
+                using var helperProcess = Process.Start(launch) ?? throw new IOException("업데이트 도우미를 실행할 수 없습니다.");
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                await pipe.WaitForConnectionAsync(timeout.Token);
+                using var reader = new StreamReader(pipe);using var writer = new StreamWriter(pipe){AutoFlush=true};
+                if(await reader.ReadLineAsync(timeout.Token)!="ready")throw new IOException("업데이트 도우미 준비 실패");
+                _closeReady=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                SendToJS("windowClosing",new{});
+                if(await Task.WhenAny(_closeReady.Task,Task.Delay(30000))!=_closeReady.Task || !await _closeReady.Task)
+                    throw new IOException("저장을 완료하지 못해 업데이트하지 않았습니다.");
+                await Task.Run(()=>_db?.BackupIfDirty());
+                await Task.Run(()=>_db?.Dispose()); _db=null;
+                await writer.WriteLineAsync("apply:"+Environment.ProcessId);
+                _allowClose=true;Close();
+            }
+            finally
+            {
+                if(!_allowClose){_closing=false;_applyingUpdate=false;_updates.ApplyFailed();SendToJS("windowCloseAborted",new{});}
+            }
         }
 
         private void ExtractResources()
@@ -83,14 +177,15 @@ namespace LogMapping
             Directory.CreateDirectory(appDir2);
 
             var asm = Assembly.GetExecutingAssembly();
-            var resources = new[] { "index.html" };
+            var resources = new[] { "index.html", "about.js", "about.css", "app-icon.ico", "fonts/rajdhani-latin-700-normal.woff2", "fonts/Pretendard-Regular.woff2", "fonts/Pretendard-Bold.woff2", "fonts/Rajdhani-OFL.txt", "fonts/Pretendard-OFL.txt" };
 
             foreach (var res in resources)
             {
-                var resourceName = "LogMapping.resources." + res;
+                var resourceName = "LogMapping.resources." + res.Replace('/', '.');
                 using var stream = asm.GetManifestResourceStream(resourceName);
                 if (stream == null) continue;
                 var destPath = Path.Combine(appDir2, res);
+                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
                 // 내용 해시가 같으면 재추출을 생략한다.
                 if(File.Exists(destPath))
                 {
@@ -114,8 +209,13 @@ namespace LogMapping
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (msg == null) return;
 
+                if (_applyingUpdate && msg.Type is not ("closeReady" or "writeFile" or "updateStatus" or "appInfo"))
+                { SendToJS(msg.Type+"Result",new { id=msg.Id, error="업데이트 준비 중입니다. 잠시 기다려 주세요." }); return; }
+
                 switch (msg.Type)
                 {
+                    case "appInfo": case "updateStatus": case "updateCheck": case "updateDownload": case "updateCancel": case "updateOpenFolder": case "updateApply":
+                        HandleUpdateMessage(msg); break;
                     case "readFile": HandleReadFile(msg); break;
                     case "writeFile": HandleWriteFile(msg); break;
                     case "listFiles": HandleListFiles(msg); break;
@@ -239,8 +339,8 @@ namespace LogMapping
 
         // ── 스트리밍 스캐너 (트리 미빌드, OOM 방지) ───────────────────────────────
         // 윈도우 드라이브/폴더: 노드를 만들자마자 emit(parentPath,name,isDir,sizeKB,mtime)
-        private int WalkDirStream(string dirPath, Action<string,string,bool,long,string> emit, CancellationToken token)
-            => FileScanner.Scan(dirPath,emit,token);
+        private int WalkDirStream(string dirPath, Action<string,string,bool,long,string> emit, CancellationToken token, FileScanner.Exclusions details)
+            => FileScanner.Scan(dirPath,emit,token,details);
 
         // Mac 드라이브(APFS/HFS+): 트리 미빌드 스트리밍.
         // 반환값 = (사용 MB, 총 MB). 총 MB는 사용 MB와 같은 헤더·같은 정밀도로 계산해
@@ -537,9 +637,14 @@ namespace LogMapping
 
         private void HandleOpenUrl(WebMessage msg)
         {
-            var url = msg.Path ?? "";
-            if (!url.StartsWith("https://") && !url.StartsWith("http://")) return;
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+            var url = AppUpdates.BrandUrl(msg.Content ?? "");
+            if (url == null) { SendToJS("openUrlResult", new { id = msg.Id, error = "허용되지 않은 링크입니다." }); return; }
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                SendToJS("openUrlResult", new { id = msg.Id, success = true });
+            }
+            catch { SendToJS("openUrlResult", new { id = msg.Id, error = "기본 브라우저를 열 수 없습니다." }); }
         }
 
         // ── SQLite 카탈로그 ───────────────────────────────────────────────────────
@@ -582,7 +687,7 @@ namespace LogMapping
                     driveId = db.CreateDrive(folderPath);
 
                     // 스트리밍 스캔: 트리를 메모리에 쌓지 않고 노드를 만들자마자 DB에 INSERT
-                    int pc = 0;int excluded=0;
+                    int pc = 0;var exclusions = new FileScanner.Exclusions();
                     long macUsedMB = 0;
                     long macTotalMB = 0;
                     db.InsertStreaming(driveId, dbEmit =>
@@ -594,7 +699,7 @@ namespace LogMapping
                             if (!isDir && (++pc % 500 == 0)) SendToJS("scanProgress", new { id = msg.Id, count = pc });
                         };
                         if (folderPath.StartsWith("macvol://")) (macUsedMB, macTotalMB) = WalkMacDriveStream(folderPath, emit, cts.Token,msg.VolumeId);
-                        else excluded=WalkDirStream(folderPath, emit,cts.Token);
+                        else WalkDirStream(folderPath, emit,cts.Token,exclusions);
                     });
 
                     cts.Token.ThrowIfCancellationRequested();CheckWindowsIdentity();
@@ -602,7 +707,7 @@ namespace LogMapping
                     { var info=new DriveInfo(folderPath);macTotalMB=info.TotalSize/1048576;macUsedMB=(info.TotalSize-info.TotalFreeSpace)/1048576; }
                     var statsJson = db.DriveStatsJson(driveId);
                     var rootJson = db.GetChildrenJson(driveId, "");
-                    SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB, autoBackupSkipped=db.FileSizeBytes>CatalogDb.AutoBackupMaxBytes, warning=excluded>0?$"시스템 폴더·연결 항목·스캔 중 사라진 항목 {excluded}개는 제외했습니다.":null });
+                    SendToJS("dbScanResult", new { id = msg.Id, driveId, statsJson, rootJson, usedMB = macUsedMB, totalMB = macTotalMB, autoBackupSkipped=db.FileSizeBytes>CatalogDb.AutoBackupMaxBytes, warning=exclusions.Summary });
 
                     // 뷰어 캐시는 내보내기에서 필요할 때 생성한다.
                     // 스캔 성공 이후 압축 작업이 다음 스캔이나 종료를 막지 않게 한다.
@@ -786,7 +891,7 @@ namespace LogMapping
             var json = JsonSerializer.Serialize(new { type, data });
             Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                webView.CoreWebView2?.PostWebMessageAsJson(json);
+                if (!_allowClose) webView.CoreWebView2?.PostWebMessageAsJson(json);
             });
         }
 
