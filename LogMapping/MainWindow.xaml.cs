@@ -244,6 +244,8 @@ namespace LogMapping
                     case "dbExportCsv": HandleDbExportCsv(msg); break;
                     case "dbExportViewer": HandleDbExportViewer(msg); break;
                     case "dbBackup": HandleDbBackup(msg); break;
+                    case "dbOptimize": HandleDbOptimize(msg); break;
+                    case "restartElevated": RestartElevated(); break;
                 }
             }
             catch (Exception ex)
@@ -288,6 +290,33 @@ namespace LogMapping
                 SendToJS("listFilesResult", new { id = msg.Id, files });
             }
             catch (Exception ex) { SendToJS("listFilesResult", new { id = msg.Id, error = ex.Message }); }
+        }
+
+        // 관리자 권한은 Mac 드라이브(물리 디스크 직접 읽기)에만 필요하다. 평소에는 일반 권한으로 실행하고
+        // Mac 드라이브를 고를 때만 사용자 확인을 받아 관리자 권한으로 다시 시작한다.
+        private static readonly bool IsElevated = new System.Security.Principal.WindowsPrincipal(
+            System.Security.Principal.WindowsIdentity.GetCurrent()).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        private const string NeedAdmin = "NEED_ADMIN";
+        private bool _restartElevated;
+        private void RestartElevated()
+        {
+            if(IsElevated || _closing || _scanTask is { IsCompleted:false } || Volatile.Read(ref _activeExports)>0) return;
+            _restartElevated=true; Close(); // 평소 종료와 같은 저장·백업 절차를 거친 뒤 OnWindowClosing이 새로 띄운다
+        }
+        private bool StartElevated()
+        {
+            try
+            {
+                var start=new ProcessStartInfo(Environment.ProcessPath ?? throw new IOException("실행 위치를 확인할 수 없습니다.")){UseShellExecute=true,Verb="runas",WorkingDirectory=_appDir};
+                start.ArgumentList.Add("--wait-exit");start.ArgumentList.Add(Environment.ProcessId.ToString());
+                using var started=Process.Start(start);
+                return true;
+            }
+            catch(Exception ex)
+            {
+                MessageBox.Show("관리자 권한으로 다시 시작하지 못했습니다. 일반 권한으로 계속합니다.\n"+ex.Message,"LogMapping");
+                return false;
+            }
         }
 
         // \\.\PhysicalDriveN 을 FileStream으로 열기 (관리자 권한 필요)
@@ -580,6 +609,12 @@ namespace LogMapping
                     bool isApfs=type.Equals("7C3457EF-0000-11AA-AA11-00306543ECAC",StringComparison.OrdinalIgnoreCase);
                     if(!isApfs && !type.Equals("48465300-0000-11AA-AA11-00306543ECAC",StringComparison.OrdinalIgnoreCase))continue;
                     int disk=Convert.ToInt32(p["DiskNumber"]);long offset=Convert.ToInt64(p["Offset"]??0L);
+                    if(!IsElevated)
+                    {
+                        result.Add(new{path=$"macvol://d{disk}o{offset}/0",label=$"[{(isApfs?"APFS":"HFS+")}] Mac 드라이브 (Disk {disk}) — 관리자 권한으로 다시 시작해야 읽을 수 있습니다",
+                            totalGB=0.0,freeGB=0.0,driveType="Removable",isMac=true,fsType=isApfs?"APFS":"HFS+",volumeId=(string?)null,needsAdmin=true});
+                        continue;
+                    }
                     try
                     {
                         using var stream=OpenPhysicalDrive(disk)??throw new IOException("디스크 접근 실패");
@@ -658,7 +693,7 @@ namespace LogMapping
         {
             lock (_dbLock)
             {
-                _db ??= new CatalogDb(Path.Combine(DataDir, "catalog.db"));
+                _db ??= new CatalogDb(Path.Combine(DataDir, "catalog.db"), pct => SendToJS("indexProgress", new { pct }));
                 return _db;
             }
         }
@@ -666,6 +701,7 @@ namespace LogMapping
         private void HandleDbScan(WebMessage msg)
         {
             if(_scanTask is { IsCompleted:false }) { SendToJS("dbScanResult",new{id=msg.Id,error="다른 스캔이 진행 중입니다."});return; }
+            if(!IsElevated && (msg.Path??"").StartsWith("macvol://")) { SendToJS("dbScanResult",new{id=msg.Id,error=NeedAdmin});return; }
             _scanCts=new CancellationTokenSource();var cts=_scanCts; // 이전 CTS는 Dispose하지 않는다: 취소 요청과 경합 시 ObjectDisposedException
 
             var folderPath = msg.Path ?? "";
@@ -831,6 +867,21 @@ namespace LogMapping
                 finally{Interlocked.Decrement(ref _activeExports);}
             });
         }
+        private void HandleDbOptimize(WebMessage msg)
+        {
+            if(_closing || _scanTask is { IsCompleted:false } || Volatile.Read(ref _activeExports)>0)
+            { SendToJS("dbOptimizeResult",new{id=msg.Id,error="스캔·내보내기·백업이 끝난 뒤 실행해 주세요."});return; }
+            Interlocked.Increment(ref _activeExports); // 종료와 다른 내보내기를 막는다
+            Task.Run(()=> {
+                try
+                {
+                    var (before,after)=Db().Optimize();
+                    SendToJS("dbOptimizeResult",new{id=msg.Id,success=true,beforeMB=before/1048576,afterMB=after/1048576});
+                }
+                catch(Exception ex){SendToJS("dbOptimizeResult",new{id=msg.Id,error=ex.Message});}
+                finally{Interlocked.Decrement(ref _activeExports);}
+            });
+        }
         private void HandleDbExportViewer(WebMessage msg) => RunExport(msg,true);
         private void HandleDbExportCsv(WebMessage msg) => RunExport(msg,false);
         private void RunExport(WebMessage msg,bool viewer)
@@ -920,10 +971,12 @@ namespace LogMapping
                 var backupError=await Task.Run(()=> { try{_db?.BackupIfDirty();return null;}catch(Exception ex){return ex.Message;} });
                 if(backupError!=null && MessageBox.Show("자동 백업에 실패했습니다: "+backupError+"\n카탈로그는 이미 저장됐습니다. 백업 없이 종료할까요?","LogMapping",MessageBoxButton.YesNo)!=MessageBoxResult.Yes)return;
                 await Task.Run(()=> _db?.Dispose());
-                _db=null;_allowClose=true;Close();
+                _db=null;
+                if(_restartElevated && !StartElevated())return; // UAC 거절: 저장만 된 상태로 계속 쓴다(DB는 다음 요청 때 다시 열린다)
+                _allowClose=true;Close();
             }
             catch(Exception ex){MessageBox.Show("종료 준비 실패: "+ex.Message);}
-            finally{_closing=false;if(!_allowClose)SendToJS("windowCloseAborted",new{});}
+            finally{_closing=false;_restartElevated=false;if(!_allowClose)SendToJS("windowCloseAborted",new{});}
         }
     }
 

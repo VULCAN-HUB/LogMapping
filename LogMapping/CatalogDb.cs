@@ -24,10 +24,17 @@ namespace LogMapping
         public string Path { get; }
         public bool WasRecovered { get; private set; } // 손상으로 DB를 재생성했는지
 
-        public CatalogDb(string dbPath)
+        private readonly Action<int>? _indexProgress; // 검색 색인 이행 진행률(0~100)
+
+        public CatalogDb(string dbPath, Action<int>? indexProgress = null)
         {
-            Path = dbPath;
+            Path = dbPath; _indexProgress = indexProgress;
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dbPath)!);
+            Open();
+        }
+
+        private void Open()
+        {
             OpenWithRecovery();
             try
             {
@@ -117,17 +124,38 @@ namespace LogMapping
             {
                 if (GetMeta("fts_schema") != "2")
                 {
-                    using var tx = _conn.BeginTransaction();
-                    using var c = _conn.CreateCommand(); c.Transaction = tx;
-                    c.CommandText = @"
+                    // 한 문장짜리 'rebuild'는 진행률을 낼 수 없고 GB 단위 WAL을 한 번에 남긴다
+                    // (실측 3.85GB·341만 행·HDD: 24분간 안내 문구뿐, 이행 뒤 첫 스캔이 초당 약 30건).
+                    // id 구간별로 나눠 넣고 구간마다 커밋한다. 완료 표식(fts_schema)은 맨 끝에만 쓰므로
+                    // 도중에 끊기면 다음 실행이 처음부터 다시 만든다.
+                    Exec(@"
 DROP TRIGGER IF EXISTS files_fts_ai; DROP TRIGGER IF EXISTS files_fts_ad;
 DROP TABLE IF EXISTS files_fts;
 CREATE VIRTUAL TABLE files_fts USING fts5(name,full_path,content='files',content_rowid='id',tokenize='trigram');
 CREATE TRIGGER files_fts_ai AFTER INSERT ON files BEGIN INSERT INTO files_fts(rowid,name,full_path) VALUES(new.id,new.name,new.full_path); END;
-CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN INSERT INTO files_fts(files_fts,rowid,name,full_path) VALUES('delete',old.id,old.name,old.full_path); END;
-INSERT INTO files_fts(files_fts) VALUES('rebuild');
-INSERT INTO meta(k,v) VALUES('fts_schema','2') ON CONFLICT(k) DO UPDATE SET v='2';";
-                    c.ExecuteNonQuery(); tx.Commit();
+CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN INSERT INTO files_fts(files_fts,rowid,name,full_path) VALUES('delete',old.id,old.name,old.full_path); END;");
+                    long maxId = Scalar("SELECT COALESCE(MAX(id),0) FROM files");
+                    const long STEP = 50000; int lastPct = -1;
+                    // 구간 커밋마다 자동 체크포인트가 돌면 HDD에서 읽기와 쓰기가 엇갈려 느려진다
+                    // (실측 341만 행: 37분, 통째 재구축은 24분). 이행 동안만 끄고 끝에서 한 번에 합친다.
+                    Exec("PRAGMA wal_autocheckpoint=0;");
+                    try
+                    {
+                        for (long lo = 0; lo < maxId; lo += STEP)
+                        {
+                            using var c = _conn.CreateCommand();
+                            c.CommandText = "INSERT INTO files_fts(rowid,name,full_path) SELECT id,name,full_path FROM files WHERE id>$lo AND id<=$hi";
+                            c.Parameters.AddWithValue("$lo", lo); c.Parameters.AddWithValue("$hi", lo + STEP);
+                            c.ExecuteNonQuery();
+                            int pct = (int)Math.Min(89, (lo + STEP) * 90 / maxId); // 90~99는 끝의 WAL 합치기 몫(실측 23분 중 7분)
+                            if (pct != lastPct) { lastPct = pct; try { _indexProgress?.Invoke(pct); } catch { } }
+                        }
+                    }
+                    finally { Exec("PRAGMA wal_autocheckpoint=1000;"); }
+                    Exec("INSERT INTO meta(k,v) VALUES('fts_schema','2') ON CONFLICT(k) DO UPDATE SET v='2';");
+                    try { _indexProgress?.Invoke(90); } catch { }
+                    try { Exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch { }
+                    try { _indexProgress?.Invoke(100); } catch { }
                 }
                 _ftsEnabled = true;
             }
@@ -1033,6 +1061,52 @@ else {
             }
         }
         private void BackupLocked() => BackupTo(Path+".bak");
+
+        // 표를 파일 안에서 연속되게 다시 쓴다. 스캔을 거듭하면 표 페이지가 색인 페이지와 섞여 흩어지고,
+        // HDD에서 캐시 없는 전체 훑기(두 글자 검색, CSV)가 탐색 위주가 된다.
+        // 실측(341만 행·3.67GB·HDD): 두 글자 검색 첫 실행 353~424초 → 24.9초, 재정렬 자체는 34분.
+        // 사본을 다 만든 뒤에만 원본과 바꾸므로 도중에 실패하면 원본은 그대로다.
+        public (long beforeBytes, long afterBytes) Optimize()
+        {
+            lock (_gate)
+            {
+                var temp = Path + ".optimizing";
+                if (File.Exists(temp)) File.Delete(temp);
+                long before = new FileInfo(Path).Length;
+                var root = System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(Path));
+                if (root != null && new DriveInfo(root).AvailableFreeSpace < before + before / 10)
+                    throw new IOException($"디스크 여유 공간이 부족합니다. DB 크기({before / 1048576:N0}MB)만큼의 여유가 필요합니다.");
+                try
+                {
+                    Exec("PRAGMA wal_checkpoint(TRUNCATE);");
+                    long drives = Scalar("SELECT COUNT(*) FROM drives"), maxId = Scalar("SELECT COALESCE(MAX(id),0) FROM files");
+                    using (var c = _conn.CreateCommand())
+                    {
+                        c.CommandTimeout = 0; c.CommandText = "VACUUM INTO $p"; c.Parameters.AddWithValue("$p", temp);
+                        c.ExecuteNonQuery();
+                    }
+                    using (var copy = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = temp, Pooling = false, Mode = SqliteOpenMode.ReadOnly }.ToString()))
+                    {
+                        copy.Open();
+                        long Read(string sql) { using var q = copy.CreateCommand(); q.CommandText = sql; return Convert.ToInt64(q.ExecuteScalar() ?? 0L); }
+                        if (Read("SELECT COUNT(*) FROM drives") != drives || Read("SELECT COALESCE(MAX(id),0) FROM files") != maxId)
+                            throw new IOException("정리한 사본이 원본과 다릅니다. 원본을 그대로 두었습니다.");
+                    }
+                    _conn.Dispose();
+                    try
+                    {
+                        // 남은 WAL이 있으면 새 파일에 옛 기록이 덮어써진다. 비어 있을 때만 바꾼다.
+                        var wal = new FileInfo(Path + "-wal");
+                        if (wal.Exists && wal.Length > 0) throw new IOException("정리 중 다른 변경이 있어 바꾸지 않았습니다. 원본을 그대로 두었습니다.");
+                        File.Move(temp, Path, true);
+                    }
+                    finally { Open(); }
+                    _dirtySinceBackup = true;
+                    return (before, new FileInfo(Path).Length);
+                }
+                finally { try { if (File.Exists(temp)) File.Delete(temp); } catch { } }
+            }
+        }
 
         // 수동 백업 — 더티 여부·크기 제한 없이 사용자가 원할 때 수행
         public void BackupSelf()

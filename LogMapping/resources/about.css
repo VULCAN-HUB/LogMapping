@@ -4,12 +4,11 @@
 :root,button,input,select,textarea{font-family:Pretendard,'Malgun Gothic',sans-serif}
 [hidden]{display:none!important}
 .brand-header{height:44px;min-height:44px;padding:4px 14px;display:flex;align-items:center;gap:10px;background:var(--bg1);border-bottom:1px solid var(--bd2)}
-.brand-wordmark,.about-appname,.logo,.s-logo{font-family:Rajdhani,Pretendard,sans-serif;font-weight:700}
+.brand-wordmark,.about-appname{font-family:Rajdhani,Pretendard,sans-serif;font-weight:700}
 .brand-wordmark{font-size:29px;line-height:27px;letter-spacing:1px}
 .brand-wordmark span{color:var(--acc)}
 .brand-subtitle{font-size:11px;color:var(--t2);line-height:12px}
-.brand-credit{margin-left:auto;font-size:11px;color:var(--t2)}
-.brand-help{width:24px;height:24px;flex-shrink:0;border-radius:50%;border:1px solid var(--t2);background:transparent;color:var(--t0);cursor:pointer;font-size:14px}
+.brand-help{margin-left:auto;width:24px;height:24px;flex-shrink:0;border-radius:50%;border:1px solid var(--t2);background:transparent;color:var(--t0);cursor:pointer;font-size:14px}
 .brand-help:hover{color:var(--acc);border-color:var(--acc)}
 .about-overlay{padding:12px;z-index:250}
 .about-dialog{width:390px;max-width:100%;max-height:calc(100dvh - 24px);border-radius:15px;display:flex;flex-direction:column}
@@ -38,4 +37,4 @@
 #about-error{color:#ff9e8c;font-size:12px;line-height:1.6;padding:0 20px 12px;white-space:pre-wrap}
 #about-error:empty{display:none}
 #font-license-text{font-family:Pretendard,sans-serif;font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:12px}
-@media(max-width:500px){.brand-credit{display:none}.brand-help{margin-left:auto}.brand-wordmark{font-size:25px}.about-header{padding-left:14px;padding-right:14px}.about-appname{font-size:25px}}
+@media(max-width:500px){.brand-wordmark{font-size:25px}.about-header{padding-left:14px;padding-right:14px}.about-appname{font-size:25px}}

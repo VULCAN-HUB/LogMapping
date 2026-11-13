@@ -17,8 +17,6 @@
 body{height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
 .titlebar{background:var(--bg1);border-bottom:0.5px solid var(--bd);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0;-webkit-app-region:drag}
 .titlebar *{-webkit-app-region:no-drag}
-.logo{font-size:15px;font-weight:700;letter-spacing:3px;color:var(--t0)}
-.logo span{color:var(--acc)}
 .tsep{flex:1}
 .file-tag{font-size:11px;color:var(--t2);border:0.5px solid var(--bd);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .btn{font-size:12px;padding:5px 11px;border:0.5px solid var(--bd2);border-radius:5px;background:var(--bg2);color:var(--t0);cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;transition:all .1s}
@@ -138,9 +136,6 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select
 .no-res{padding:40px 0;text-align:center;color:var(--t2);font-size:12px}
 mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
 #startup{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:40px}
-@keyframes logoglow{0%,100%{text-shadow:0 0 24px rgba(211,84,0,.25)}50%{text-shadow:0 0 48px rgba(211,84,0,.55),0 0 90px rgba(211,84,0,.15)}}
-.s-logo{font-size:38px;font-weight:700;letter-spacing:6px;color:var(--t0);animation:logoglow 3.5s ease-in-out infinite}
-.s-logo span{color:var(--acc)}
 .s-sub{font-size:11px;color:var(--t2);letter-spacing:2.5px;text-transform:uppercase;margin-top:-18px}
 .s-card{background:var(--bg2);border:0.5px solid var(--bd2);border-radius:10px;padding:24px 32px;display:flex;flex-direction:column;gap:12px;width:380px}
 .s-title{font-size:11px;color:var(--t2);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px}
@@ -197,14 +192,10 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
 <header class="brand-header">
   <img src="app-icon.ico" width="36" height="36" alt=""/>
   <div><div class="brand-wordmark">LOG<span>MAPPING</span></div><div class="brand-subtitle">Offline Drive Catalog</div></div>
-  <span class="brand-credit">LogMapping · Unknown</span>
   <button class="brand-help" onclick="openAbout()" aria-label="LogMapping 정보" title="LogMapping 정보">?</button>
 </header>
 
 <div id="startup">
-  <div>
-    <div class="s-logo">LOG<span>MAPPING</span></div>
-  </div>
   <div class="s-card">
     <div class="s-title">시작하기</div>
     <div id="auto-load-area"></div>
@@ -223,14 +214,13 @@ mark{background:#D3540025;color:#FF7A2F;border-radius:2px}
 
 <div id="appwrap" style="display:none;flex:1;flex-direction:column;overflow:hidden">
   <div class="titlebar">
-    <div class="logo">LOG<span>MAPPING</span></div>
-    <div class="tsep"></div>
     <div class="file-tag" id="file-tag">저장 안 됨</div>
     <button class="btn dirty" id="btn-save" style="display:none" onclick="saveCurrentFile()">💾 저장</button>
     <button class="btn" onclick="saveAsNewFile()">다른 이름 저장</button>
     <button class="btn" onclick="exportCSV()" title="현재 카탈로그의 파일 목록을 CSV로 내보내기">↓ CSV</button>
     <button class="btn" onclick="exportMobileViewer()" title="스마트폰에서 검색 가능한 뷰어 HTML 생성">📱 뷰어</button>
     <button class="btn" onclick="backupDb()" title="현재 카탈로그와 DB를 한 세트로 백업">🛟 백업</button>
+    <button class="btn" onclick="optimizeDb()" title="DB를 다시 정리해 검색·내보내기를 빠르게 합니다 (큰 카탈로그는 수십 분)">⚡ 최적화</button>
     <button class="btn" onclick="goStartup()">← 홈</button>
     <button class="btn pri" onclick="openAddDrive()">+ 드라이브 추가</button>
   </div>
@@ -471,9 +461,11 @@ window.chrome.webview.addEventListener('message', function(ev) {
   if (msg.type === 'windowClosing') { finishClosing(); return; }
   if (msg.type === 'windowCloseAborted') { _closingForExit=false;hideBusy();return; }
   if (msg.type === 'exportProgress') { onExportProgress(msg.data); return; }
+  if (msg.type === 'indexProgress') { onIndexProgress(msg.data.pct); return; }
   if (msg.data && msg.data.id && _pending.has(msg.data.id)) {
     var pending = _pending.get(msg.data.id);clearTimeout(pending.timer);
     _pending.delete(msg.data.id);
+    if(msg.data.error==='NEED_ADMIN'){msg.data.error='Mac 드라이브는 관리자 권한으로 다시 시작해야 읽을 수 있습니다.';setTimeout(askRestartElevated,400);}
     if((msg.data.error&&msg.data.error!=='cancelled')||msg.data.success===false)pending.reject(new Error(msg.data.error||'작업 실패'));
     else pending.resolve(msg.data);
   }
@@ -700,6 +692,37 @@ function onExportProgress(d){
   var total=d.total||1,done=d.done||0;
   setBusy('드라이브 '+done+' / '+total+' 처리 완료<br><span style="font-size:11px">파일 목록을 압축해 하나의 HTML로 담는 중입니다.</span>',
           Math.max(4,Math.round(done/total*100)));
+}
+// 평소에는 일반 권한으로 실행한다. Mac 드라이브(APFS·HFS+)는 디스크를 직접 읽어야 해서 그때만 관리자 권한을 요청한다.
+function askRestartElevated(){
+  if(_mutations||_jobs||_catalogLoading||_closingForExit){showToast('진행 중인 작업이 끝난 뒤 다시 시도하세요.');return;}
+  if(!confirm('Mac 드라이브(APFS·HFS+)를 읽으려면 관리자 권한이 필요합니다.\n\n변경 내용을 저장하고 관리자 권한으로 다시 시작할까요?\n다시 시작한 뒤 카탈로그를 열고 드라이브를 다시 선택해 주세요.'))return;
+  closeModal();window.chrome.webview.postMessage({type:'restartElevated'});
+}
+
+// ── DB 최적화 (수동) ─────────────────────────────────────────────────────────
+// 스캔을 거듭하면 파일 목록이 DB 안에서 흩어져 두 글자 검색·CSV의 첫 실행이 느려진다. 다시 정리해 붙인다.
+async function optimizeDb(){
+  if(!catalog.drives.length){alert('카탈로그가 비어 있습니다.');return;}
+  if(!confirm('DB를 다시 정리해 검색과 내보내기를 빠르게 합니다.\n\n· 큰 카탈로그는 수십 분 걸립니다 (341만 파일·HDD 실측 34분).\n· DB 크기만큼 디스크 여유 공간이 필요합니다.\n· 끝날 때까지 창을 닫을 수 없습니다.\n\n지금 실행할까요?'))return;
+  var started=Date.now(),timer=setInterval(function(){setBusy('파일 목록을 다시 정리하고 있습니다. '+Math.round((Date.now()-started)/60000)+'분 경과<br><span style="font-size:11px">완료될 때까지 창을 닫지 마세요. 도중에 실패하면 원본은 그대로 남습니다.</span>');},30000);
+  showBusy('DB 최적화 중','파일 목록을 다시 정리하고 있습니다.<br><span style="font-size:11px">완료될 때까지 창을 닫지 마세요. 도중에 실패하면 원본은 그대로 남습니다.</span>',50);
+  try{
+    if(isDirty)await persistCatalog();
+    var r=await callNative('dbOptimize',{},86400000);
+    treeCache={};await describeDb();
+    alert('최적화 완료\n'+r.beforeMB+'MB → '+r.afterMB+'MB');
+  }catch(e){showErrDetail('최적화 실패: '+e.message);}
+  finally{clearInterval(timer);hideBusy();}
+}
+
+// 옛 DB를 처음 열 때 한 번 도는 검색 색인 이행. 남은 시간은 지금까지의 속도로 어림한다.
+var _indexStart=0;
+function onIndexProgress(pct){
+  if(!_indexStart)_indexStart=Date.now();
+  var left=pct>=3&&pct<90?Math.max(1,Math.round((Date.now()-_indexStart)*(100-pct)/pct/60000)):0;
+  setBusy((pct>=90&&pct<100?'검색 색인을 DB에 합치는 중 (마무리 단계, 몇 분 걸릴 수 있습니다)':'검색 색인을 새 형식으로 옮기는 중 '+pct+'%'+(left?' · 약 '+left+'분 남음':''))+'<br><span style="font-size:11px">한 번만 실행됩니다. 완료될 때까지 창을 닫지 마세요.</span>',Math.max(4,pct));
+  if(pct>=100)_indexStart=0;
 }
 
 // ── 백업 (수동) ──────────────────────────────────────────────────────────────
@@ -1096,7 +1119,8 @@ async function renderSearch(el){
   else if(filterCat==='folder')params.foldersOnly=true;
   else if(EXT_MAP[filterCat])params.extensions=EXT_MAP[filterCat].join(',');
   else if(filterCat==='other')params.extensions='!'+Object.values(EXT_MAP).flat().join(',');
-  el.innerHTML='<div class="no-res">검색 중...</div>';
+  // 세 글자 미만은 색인을 못 써 전체 목록을 훑는다(실측 341만 파일·HDD 첫 실행 6분). 멈춘 것으로 오해하지 않게 알린다.
+  el.innerHTML='<div class="no-res">검색 중...'+(Array.from(q).length<3?'<br><span style="font-size:11px">두 글자 이하 검색은 전체 목록을 훑습니다. 큰 카탈로그의 첫 검색은 몇 분 걸릴 수 있습니다.</span>':'')+'</div>';
   try{var rows=dbRows(await dbCall('dbSearch',params));if(epoch!==_renderEpoch)return;mountFlatList(el,rows,'검색 결과',q,50000);}
   catch(e){if(epoch===_renderEpoch)showLoadError(el,e);}
 }
@@ -1234,9 +1258,9 @@ function makeDrivePickerItem(d){
   div.style.cssText='background:var(--bg3);border:0.5px solid var(--bd2);border-radius:6px;padding:10px 12px;cursor:pointer;transition:border .1s';
   div.onmouseover=function(){this.style.borderColor='var(--acc)';};
   div.onmouseout=function(){this.style.borderColor='var(--bd2)';};
-  div.onclick=function(){selectConnectedDrive(d.path,d.label,d.totalGB,d.freeGB,d.volumeId);};
+  div.onclick=function(){if(d.needsAdmin)askRestartElevated();else selectConnectedDrive(d.path,d.label,d.totalGB,d.freeGB,d.volumeId);};
   div.innerHTML='<div style="font-size:12px;font-weight:600;color:var(--t0)">💽 '+escHtml(d.label)+typeLabel+'</div>'
-    +'<div style="font-size:11px;color:var(--t2);margin-top:3px">'+escHtml(d.path)+' · 전체 '+d.totalGB+'GB · 여유 '+d.freeGB+'GB</div>';
+    +'<div style="font-size:11px;color:var(--t2);margin-top:3px">'+(d.needsAdmin?'누르면 저장 후 관리자 권한으로 다시 시작합니다':escHtml(d.path)+' · 전체 '+(+d.totalGB).toFixed(1)+'GB · 여유 '+(+d.freeGB).toFixed(1)+'GB')+'</div>';
   return div;
 }
 function appendMacDrivesToPicker(macDrives){
@@ -1270,7 +1294,7 @@ function selectConnectedDrive(drivePath,label,totalGB,freeGB,volumeId){
   document.getElementById('step1').style.display='none';document.getElementById('step2').style.display='';
   document.getElementById('btn-scan').style.display='';document.getElementById('btn-noscan').style.display='none';
   document.getElementById('inp-health').value='good';
-  document.getElementById('selected-drive-info').innerHTML='💽 <b>'+escHtml(label)+'</b><br>경로: '+escHtml(drivePath)+(totalGB?' · 전체 '+totalGB+' GB · 여유 '+freeGB+' GB':'');
+  document.getElementById('selected-drive-info').innerHTML='💽 <b>'+escHtml(label)+'</b><br>경로: '+escHtml(drivePath)+(totalGB?' · 전체 '+(+totalGB).toFixed(1)+' GB · 여유 '+(+freeGB).toFixed(1)+' GB':'');
   document.getElementById('inp-num').value=Math.max(0,...catalog.drives.map(function(d){return d.num;}))+1;
   document.getElementById('inp-name').value=label.replace(/\s*\(.*\)/,'').replace(/^[A-Z]:\s*-\s*/,'').trim();
   document.getElementById('inp-note').value='';
@@ -1507,7 +1531,7 @@ document.addEventListener('keydown',function(e){
     _mutations++;try{return await original.apply(this,arguments);}catch(e){showErrDetail(e.message);}finally{_mutations--;}
   };
 });
-['exportCSV','exportMobileViewer','backupDb','saveAsNewFile'].forEach(function(name){
+['exportCSV','exportMobileViewer','backupDb','optimizeDb','saveAsNewFile'].forEach(function(name){
   var original=window[name];window[name]=async function(){
     if(_mutations||_jobs||_catalogLoading||_closingForExit){showToast('진행 중인 작업이 끝난 뒤 다시 시도하세요.');return;}
     _jobs++;try{return await original.apply(this,arguments);}catch(e){showErrDetail(e.message);}finally{_jobs--;}

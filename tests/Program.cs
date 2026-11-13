@@ -35,7 +35,23 @@ using(var db=new CatalogDb(dbPath))
 }
 Check("legacy name-only FTS migration preserves rows",()=>{
  using(var conn=new SqliteConnection(new SqliteConnectionStringBuilder{DataSource=dbPath,Pooling=false}.ToString())){conn.Open();using var c=conn.CreateCommand();c.CommandText="DROP TRIGGER files_fts_ai; DROP TRIGGER files_fts_ad; DROP TABLE files_fts; CREATE VIRTUAL TABLE files_fts USING fts5(name,content='files',content_rowid='id',tokenize='trigram');DELETE FROM meta WHERE k='fts_schema';";c.ExecuteNonQuery();}
- using var db=new CatalogDb(dbPath);Assert(Rows(db.SearchJson("project.2026/photo",20,new long[]{1})).GetArrayLength()==1);
+ var progress=new List<int>();
+ using var db=new CatalogDb(dbPath,progress.Add);Assert(Rows(db.SearchJson("project.2026/photo",20,new long[]{1})).GetArrayLength()==1);
+ Assert(progress.Count>0&&progress[^1]==100&&progress.SequenceEqual(progress.OrderBy(x=>x))); // 진행률은 늘기만 하고 100으로 끝난다
+ Assert(!File.Exists(dbPath+"-wal")||new FileInfo(dbPath+"-wal").Length==0); // 이행 직후 WAL을 합쳐 둔다
+});
+Check("optimize rewrites the database and keeps rows, tags, search and identity",()=>{
+ var path=System.IO.Path.Combine(root,"optimize.db");
+ using var db=new CatalogDb(path);var d=db.CreateDrive("fixture");
+ db.InsertStreaming(d,e=>{for(int i=0;i<3000;i++)e("folder","사진-"+i+".jpg",false,1,"2026-01-01");});
+ db.SetItemColor(d,"folder/사진-7.jpg","red");var identity=Rows(db.DescribeJson()).GetProperty("databaseId").GetString();
+ var (before,after)=db.Optimize();Assert(before>0&&after>0&&!File.Exists(path+".optimizing"));
+ Assert(Rows(db.SearchJson("사진-2999",10,new long[]{d})).GetArrayLength()==1); // 세 글자 이상: 색인
+ Assert(Rows(db.SearchJson("사진",5000,new long[]{d})).GetArrayLength()==3000); // 두 글자: 전체 훑기
+ Assert(Rows(db.SearchJson("사진-7.jpg",10,new long[]{d},"red")).GetArrayLength()==1);
+ Assert(Rows(db.DescribeJson()).GetProperty("databaseId").GetString()==identity);
+ db.InsertStreaming(db.CreateDrive("after"),e=>e("","뒤에-추가.txt",false,1,"")); // 바꾼 뒤에도 쓰기와 색인 갱신이 된다
+ Assert(Rows(db.SearchJson("뒤에-추가",10,new long[]{d,d+1})).GetArrayLength()==1);
 });
 Check("corrupt DB preserved byte-for-byte",()=>{var path=System.IO.Path.Combine(root,"corrupt.db");var bytes=Encoding.UTF8.GetBytes("not a database, preserve me");File.WriteAllBytes(path,bytes);bool threw=false;try{using var db=new CatalogDb(path);}catch(IOException){threw=true;}Assert(threw);Assert(File.ReadAllBytes(path).SequenceEqual(bytes));});
 Check("atomic .hcat retains previous version",()=>{var p=System.IO.Path.Combine(root,"snapshot.hcat");AtomicStorage.Write(p,"old");AtomicStorage.Write(p,"new");Assert(File.ReadAllText(p)=="new"&&File.ReadAllText(p+".bak")=="old");});

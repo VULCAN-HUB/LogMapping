@@ -66,16 +66,15 @@ internal static class FileScanner
         {
             token.ThrowIfCancellationRequested();
             var (path,relative)=stack.Pop();
-            IEnumerable<string> entries;
-            try{entries=Directory.EnumerateFileSystemEntries(path);}
+            // Attributes, size and time come from the directory listing itself: no per-file stat call.
+            IEnumerable<FileSystemInfo> entries;
+            try{entries=new DirectoryInfo(path).EnumerateFileSystemInfos();}
             catch(DirectoryNotFoundException) when(relative.Length>0 && Directory.Exists(root)){Exclude("사라진 항목",path);continue;}
-            foreach(var entry in entries)
+            foreach(var info in entries)
             {
-                token.ThrowIfCancellationRequested();var name=Path.GetFileName(entry);
+                token.ThrowIfCancellationRequested();var name=info.Name;var entry=info.FullName;
                 if(relative.Length==0 && (name.Equals("System Volume Information",StringComparison.OrdinalIgnoreCase)||name.Equals("$RECYCLE.BIN",StringComparison.OrdinalIgnoreCase))) {Exclude("시스템 폴더",entry);continue;}
-                FileAttributes attributes;
-                try{attributes=File.GetAttributes(entry);}
-                catch(Exception e) when(e is FileNotFoundException or DirectoryNotFoundException){Exclude("사라진 항목",entry);continue;}
+                FileAttributes attributes=info.Attributes;
                 if((attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0) {Exclude("숨김·시스템 항목",entry);continue;}
                 bool directory=attributes.HasFlag(FileAttributes.Directory);
                 bool link=attributes.HasFlag(FileAttributes.ReparsePoint);
@@ -88,10 +87,9 @@ internal static class FileScanner
                 else
                 {
                     if(link){Exclude("연결 항목",entry);continue;}
-                    var f=new FileInfo(entry);long bytes;
-                    try{bytes=f.Length;}catch(Exception e) when(e is FileNotFoundException or DirectoryNotFoundException){Exclude("사라진 항목",entry);continue;}
+                    long bytes=((FileInfo)info).Length;
                     if(name.StartsWith("._",StringComparison.Ordinal) && IsAppleDouble(entry)) {Exclude("Mac 보조 파일",entry);continue;}
-                    emit(relative,name,false,bytes==0?0:Math.Max(1,bytes/1024),f.LastWriteTime.ToString("yyyy-MM-dd"));
+                    emit(relative,name,false,bytes==0?0:Math.Max(1,bytes/1024),info.LastWriteTime.ToString("yyyy-MM-dd"));
                 }
             }
         }
